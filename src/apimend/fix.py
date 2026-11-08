@@ -153,7 +153,10 @@ def render_diff(edits: list[Edit]) -> str:
     for file, new_text in _new_contents(edits).items():
         old_lines = _read_lines(file)
         new_lines = io.StringIO(new_text, newline="").readlines()
-        parts.extend(difflib.unified_diff(old_lines, new_lines, f"a/{file}", f"b/{file}"))
+        for line in difflib.unified_diff(old_lines, new_lines, f"a/{file}", f"b/{file}"):
+            if not line.endswith("\n"):  # last line of a file without a final newline
+                line += "\n\\ No newline at end of file\n"
+            parts.append(line)
     return "".join(parts)
 
 

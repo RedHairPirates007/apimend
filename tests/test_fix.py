@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 
 from apimend.cli import main
-from apimend.fix import apply_edits, find_renames, plan_fixes, restore
+from apimend.fix import apply_edits, find_renames, plan_fixes, render_diff, restore
 from apimend.scan import NEW_REQUIRED_PROPERTY, REMOVED_PROPERTY, Change, find_changes, load_spec
 
 LAB = Path(__file__).resolve().parent.parent / "lab" / "pizza-api"
@@ -126,3 +126,14 @@ def test_end_to_end_fix_is_verified_against_a_mock_of_the_new_api(lab, monkeypat
     assert '"pizza_size": size' in (app / "pizza_client.py").read_text()
     scan = ["scan", str(lab / "v1.yaml"), str(lab / "v2.yaml"), str(app)]
     assert main(scan) == 0  # nothing left to fix
+
+
+def test_preview_marks_a_missing_final_newline_like_git(tmp_path):
+    (tmp_path / "client.py").write_text('post("/orders", {"size": 1})')  # no final newline
+    diff = render_diff(plan_fixes(RENAME_CHANGES, tmp_path))
+    assert diff.splitlines()[-4:] == [
+        '-post("/orders", {"size": 1})',
+        "\\ No newline at end of file",
+        '+post("/orders", {"pizza_size": 1})',
+        "\\ No newline at end of file",
+    ]
