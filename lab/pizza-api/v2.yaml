@@ -1,0 +1,60 @@
+openapi: 3.0.3
+info:
+  title: Pizza API
+  version: 2.0.0
+paths:
+  /menu:
+    get:
+      summary: List the pizzas on the menu
+      responses:
+        "200":
+          description: The menu
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: object
+                  required: [name, price]
+                  properties:
+                    name:
+                      type: string
+                    price:
+                      type: number
+              example:
+                - name: margherita
+                  price: 8.5
+                - name: pepperoni
+                  price: 9.5
+  /orders:
+    post:
+      summary: Order a pizza
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [pizza, pizza_size]
+              properties:
+                pizza:
+                  type: string
+                pizza_size:
+                  type: string
+                  enum: [small, medium, large]
+      responses:
+        "201":
+          description: Order created
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [id, status]
+                properties:
+                  id:
+                    type: string
+                  status:
+                    type: string
+              example:
+                id: ord_123
+                status: baking
