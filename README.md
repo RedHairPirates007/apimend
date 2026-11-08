@@ -22,8 +22,8 @@
 ---
 
 > [!NOTE]
-> apimend is in **early development**. Breaking-change detection works today; automatic,
-> test-verified fixes are on the [roadmap](#roadmap).
+> apimend is in **early development**. Detecting breaking changes and locating affected code
+> work today; automatic, test-verified fixes are on the [roadmap](#roadmap).
 
 ## Why apimend?
 
@@ -36,7 +36,7 @@ apimend closes that gap:
 | | Capability | Status |
 |:-:|---|:-:|
 | 🔍 | **Detect** breaking changes between two versions of an API spec | ✅ Available |
-| 📍 | **Locate** the exact lines of your code each change affects | 🚧 Planned |
+| 📍 | **Locate** the exact lines of your code each change affects | ✅ Available |
 | 🛠️ | **Fix** the affected code automatically | 🚧 Planned |
 | ✅ | **Verify** every fix against a mock of the new API before proposing it | 🚧 Planned |
 
@@ -56,6 +56,7 @@ container installs Python, Node.js, [Prism](https://github.com/stoplightio/prism
 ```bash
 apimend doctor
 apimend diff lab/pizza-api/v1.yaml lab/pizza-api/v2.yaml
+apimend scan lab/pizza-api/v1.yaml lab/pizza-api/v2.yaml lab/pizza-api/app
 ```
 
 <details>
@@ -119,6 +120,36 @@ Designed for scripts and CI pipelines:
 | `1` | Breaking changes found |
 | `2` | Could not run (for example, oasdiff is missing or a spec is invalid) |
 
+### `apimend scan <old-spec> <new-spec> [folder]`
+
+Finds the exact lines of Python code affected by breaking changes to request bodies and
+endpoints, and spots likely renames.
+
+```console
+$ apimend scan lab/pizza-api/v1.yaml lab/pizza-api/v2.yaml lab/pizza-api/app
+Scanning lab/pizza-api/app for code affected by 2 breaking change(s)...
+
+POST /orders: request property 'size' was removed
+  hint: looks like it was renamed to 'pizza_size'
+  lab/pizza-api/app/pizza_client.py:34: return _request("POST", "/orders", {"pizza": pizza, "size": size})
+
+POST /orders: request property 'pizza_size' is now required
+  hint: looks like the new name for 'size'
+  lab/pizza-api/app/pizza_client.py:34: return _request("POST", "/orders", {"pizza": pizza, "size": size})
+
+Found 1 affected line(s) in 1 file(s).
+```
+
+- The folder defaults to the current directory. Skip files with `--exclude "tests/*"`
+  (repeatable).
+- Code is read with Python's `ast` module, so comments are ignored, and only files that
+  reference the endpoint are checked.
+- Exit codes: `0` not affected, `1` affected code found, `2` could not run.
+
+> [!IMPORTANT]
+> Current limits: scans **Python** files only, checks **request bodies and removed endpoints**
+> (not responses yet), and finds endpoints written as plain strings in the code.
+
 ## How it works
 
 ```mermaid
@@ -132,8 +163,8 @@ flowchart LR
 
     classDef done fill:#0F766E,stroke:#0F766E,color:#ffffff
     classDef planned stroke-dasharray:5 5
-    class B done
-    class A,C,D,E,F,G planned
+    class B,C done
+    class A,D,E,F,G planned
 ```
 
 <sub>Solid: available today · Dashed: planned</sub>
@@ -193,7 +224,8 @@ apimend/
 ├── lab/pizza-api/        Test bed: fake API versions and a customer app
 ├── src/apimend/          The apimend package
 │   ├── __init__.py
-│   └── cli.py            Command-line interface (doctor, diff)
+│   ├── cli.py            Command-line interface (doctor, diff, scan)
+│   └── scan.py           Finds code affected by breaking changes
 ├── tests/                Tests for apimend itself
 └── pyproject.toml        Package metadata and tool settings
 ```
@@ -204,8 +236,9 @@ apimend/
 
 - [x] Detect breaking changes between two OpenAPI specs (`apimend diff`)
 - [x] Environment checks (`apimend doctor`), test suite, dev container and CI
-- [ ] `apimend scan` — find the exact lines of code a breaking change affects
+- [x] `apimend scan` — find the exact lines of Python code a breaking change affects
 - [ ] `apimend fix` — generate fixes and verify them against a mock of the new API
+- [ ] `scan` support for more languages (JavaScript/TypeScript) and response changes
 - [ ] Real-world benchmark using past API migrations from public repositories
 - [ ] GitHub Action / App that opens verified pull requests automatically
 
