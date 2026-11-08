@@ -128,7 +128,8 @@ def find_changes(old: dict, new: dict) -> list[Change]:
                 hint = f"looks like it was renamed to '{brand_new[0]}'" if rename else ""
                 changes.append(Change(name, path, REMOVED_PROPERTY, prop, hint))
             for prop in newly_required:
-                hint = f"looks like the new name for '{removed[0]}'" if rename else ""
+                is_new_name = rename and prop in brand_new
+                hint = f"looks like the new name for '{removed[0]}'" if is_new_name else ""
                 changes.append(Change(name, path, NEW_REQUIRED_PROPERTY, prop, hint))
     return changes
 
@@ -183,7 +184,11 @@ def find_usages(root: str | Path, change: Change, exclude: Iterable[str] = ()) -
             continue
         if change.kind == REMOVED_PROPERTY:
             hits = {ln for ln, text in strings if text == change.prop}
-        else:  # new required property or removed endpoint: every call to the endpoint
+        elif change.kind == NEW_REQUIRED_PROPERTY:
+            if any(text == change.prop for _, text in strings):
+                continue  # this file already sends the property
+            hits = endpoint_lines  # every call to the endpoint must now send it
+        else:  # removed endpoint: every call to it is affected
             hits = endpoint_lines
         lines = source.splitlines()
         usages.extend(Usage(file, ln, lines[ln - 1].strip()) for ln in sorted(hits))

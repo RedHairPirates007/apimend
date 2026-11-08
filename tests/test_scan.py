@@ -118,3 +118,20 @@ def test_scan_command_with_identical_specs_exits_0(capsys):
 def test_scan_command_with_missing_spec_exits_2(capsys):
     assert main(["scan", "missing.yaml", str(V2), str(APP)]) == 2
     assert "cannot read" in capsys.readouterr().err
+
+
+
+def test_rename_hint_only_goes_to_the_new_property():
+    old = make_spec({"pizza": {}, "size": {}}, ["size"])
+    new = make_spec({"pizza": {}, "pizza_size": {}}, ["pizza", "pizza_size"])
+    hints = {c.prop: c.hint for c in find_changes(old, new)}
+    assert "renamed to 'pizza_size'" in hints["size"]
+    assert "new name" in hints["pizza_size"]
+    assert hints["pizza"] == ""
+
+
+def test_files_already_sending_a_new_required_property_are_not_flagged(tmp_path):
+    (tmp_path / "old.py").write_text('post("/orders", {"size": 1})\n')
+    (tmp_path / "new.py").write_text('post("/orders", {"pizza_size": 1})\n')
+    change = Change("POST", "/orders", NEW_REQUIRED_PROPERTY, "pizza_size")
+    assert [u.file.name for u in find_usages(tmp_path, change)] == ["old.py"]
