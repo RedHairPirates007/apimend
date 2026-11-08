@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="128" height="128" viewBox="0 0 128 128" role="img" aria-label="apimend logo">
+  <rect x="4" y="4" width="120" height="120" rx="28" fill="#0F766E"/>
+  <path d="M44 34 C34 34 34 40 34 48 L34 56 C34 61 31 64 26 64 C31 64 34 67 34 72 L34 80 C34 88 34 94 44 94"
+        fill="none" stroke="#FFFFFF" stroke-width="8" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M84 34 C94 34 94 40 94 48 L94 56 C94 61 97 64 102 64 C97 64 94 67 94 72 L94 80 C94 88 94 94 84 94"
+        fill="none" stroke="#FFFFFF" stroke-width="8" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M50 65 L60 75 L79 54" fill="none" stroke="#5EEAD4" stroke-width="9"
+        stroke-linecap="round" stroke-linejoin="round"/>
+</svg>
