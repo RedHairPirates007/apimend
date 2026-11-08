@@ -22,8 +22,9 @@
 ---
 
 > [!NOTE]
-> apimend is in **early development**. Detecting breaking changes and locating affected code
-> work today; automatic, test-verified fixes are on the [roadmap](#roadmap).
+> apimend is in **early development**. It can detect breaking changes, locate affected code,
+> and fix renamed request properties with test verification today. More kinds of fixes are on
+> the [roadmap](#roadmap).
 
 ## Why apimend?
 
@@ -37,13 +38,13 @@ apimend closes that gap:
 |:-:|---|:-:|
 | 🔍 | **Detect** breaking changes between two versions of an API spec | ✅ Available |
 | 📍 | **Locate** the exact lines of your code each change affects | ✅ Available |
-| 🛠️ | **Fix** the affected code automatically | 🚧 Planned |
-| ✅ | **Verify** every fix against a mock of the new API before proposing it | 🚧 Planned |
+| 🛠️ | **Fix** the affected code automatically | ✅ Renames |
+| ✅ | **Verify** every fix against a mock of the new API before keeping it | ✅ Available |
 
 > [!TIP]
-> **What makes apimend different:** a fix is only proposed after it passes tests against a
-> mock of the new API. If apimend can't produce a working fix, it explains the problem
-> instead of opening a broken pull request.
+> **What makes apimend different:** a fix is only kept after your tests pass against a mock
+> of the new API. If they fail, apimend undoes the fix and shows you why, instead of leaving
+> broken code behind.
 
 ## Quick start
 
@@ -57,6 +58,7 @@ container installs Python, Node.js, [Prism](https://github.com/stoplightio/prism
 apimend doctor
 apimend diff lab/pizza-api/v1.yaml lab/pizza-api/v2.yaml
 apimend scan lab/pizza-api/v1.yaml lab/pizza-api/v2.yaml lab/pizza-api/app
+apimend fix  lab/pizza-api/v1.yaml lab/pizza-api/v2.yaml lab/pizza-api/app   # preview only
 ```
 
 <details>
@@ -150,6 +152,55 @@ Found 1 affected line(s) in 1 file(s).
 > Current limits: scans **Python** files only, checks **request bodies and removed endpoints**
 > (not responses yet), and finds endpoints written as plain strings in the code.
 
+### `apimend fix <old-spec> <new-spec> [folder] --test "<command>"`
+
+Fixes affected code and **proves the fix works**: it applies the change, runs your tests
+against a [Prism](https://github.com/stoplightio/prism) mock of the **new** API, and keeps the
+fix only if they pass.
+
+```console
+$ apimend fix lab/pizza-api/v1.yaml lab/pizza-api/v2.yaml lab/pizza-api/app --test "python -m pytest lab/pizza-api/app -q"
+Proposed fix (1 line(s)):
+
+--- a/lab/pizza-api/app/pizza_client.py
++++ b/lab/pizza-api/app/pizza_client.py
+@@ -31,4 +31,4 @@
+ 
+ def place_order(pizza: str, size: str) -> dict:
+     # Written for API v1, which expects the field name "size".
+-    return _request("POST", "/orders", {"pizza": pizza, "size": size})
+\ No newline at end of file
++    return _request("POST", "/orders", {"pizza": pizza, "pizza_size": size})
+\ No newline at end of file
+
+Applying the fix and verifying it with: python -m pytest lab/pizza-api/app -q
+Tests will run against a mock of lab/pizza-api/v2.yaml on port 4010.
+
+VERIFIED: the tests passed, so the fix has been kept.
+Review the change with 'git diff' before committing it.
+```
+
+| Option | Meaning |
+|---|---|
+| `--test "<command>"` | Command that runs your tests. **Without it, `fix` only previews** and changes nothing. |
+| `--port <number>` | Port for the mock server (default `4010`). The URL is also passed to your tests as `APIMEND_MOCK_URL`. |
+| `--no-mock` | Run the tests without starting a mock server. |
+| `--exclude "<pattern>"` | Skip matching files, as in `scan`. |
+
+**Safety first:**
+
+- Only the exact characters that need changing are edited — quote style, comments, spacing,
+  line endings and non-English text are preserved.
+- If the tests fail, a setup problem occurs (busy port, Prism missing), or you press
+  <kbd>Ctrl</kbd>+<kbd>C</kbd>, every file is restored byte for byte.
+- Exit codes: `0` fixed and verified (or nothing to fix), `1` preview only or tests failed,
+  `2` could not run.
+
+> [!NOTE]
+> `fix` currently repairs **renamed request properties** in Python code (dictionary keys such
+> as `{"size": ...}` and lookups such as `body["size"]`). It only acts when the rename is
+> unambiguous.
+
 ## How it works
 
 ```mermaid
@@ -163,8 +214,8 @@ flowchart LR
 
     classDef done fill:#0F766E,stroke:#0F766E,color:#ffffff
     classDef planned stroke-dasharray:5 5
-    class B,C done
-    class A,D,E,F,G planned
+    class B,C,D,E done
+    class A,F,G planned
 ```
 
 <sub>Solid: available today · Dashed: planned</sub>
@@ -196,7 +247,13 @@ python -m pytest lab/pizza-api/app -v     # 2 passed
 
 Stop Prism (<kbd>Ctrl</kbd>+<kbd>C</kbd>), start it again with `v2.yaml`, and rerun the tests.
 The order test now fails with `HTTP Error 422` — the app broke without any change to its code.
-Fixing that automatically is apimend's job.
+
+Stop Prism again, then let apimend repair the app and prove the repair works:
+
+```bash
+apimend fix lab/pizza-api/v1.yaml lab/pizza-api/v2.yaml lab/pizza-api/app --test "python -m pytest lab/pizza-api/app -q"
+git restore lab/pizza-api/app/pizza_client.py   # put the lab back for next time
+```
 
 </details>
 
@@ -224,7 +281,8 @@ apimend/
 ├── lab/pizza-api/        Test bed: fake API versions and a customer app
 ├── src/apimend/          The apimend package
 │   ├── __init__.py
-│   ├── cli.py            Command-line interface (doctor, diff, scan)
+│   ├── cli.py            Command-line interface (doctor, diff, scan, fix)
+│   ├── fix.py            Applies fixes and verifies them with your tests
 │   └── scan.py           Finds code affected by breaking changes
 ├── tests/                Tests for apimend itself
 └── pyproject.toml        Package metadata and tool settings
@@ -237,7 +295,8 @@ apimend/
 - [x] Detect breaking changes between two OpenAPI specs (`apimend diff`)
 - [x] Environment checks (`apimend doctor`), test suite, dev container and CI
 - [x] `apimend scan` — find the exact lines of Python code a breaking change affects
-- [ ] `apimend fix` — generate fixes and verify them against a mock of the new API
+- [x] `apimend fix` — fix renamed request properties and verify against a mock of the new API
+- [ ] More automatic fixes (for example AI-assisted), kept behind the same test gate
 - [ ] `scan` support for more languages (JavaScript/TypeScript) and response changes
 - [ ] Real-world benchmark using past API migrations from public repositories
 - [ ] GitHub Action / App that opens verified pull requests automatically
