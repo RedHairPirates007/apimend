@@ -4,6 +4,7 @@ Commands:
   apimend doctor             Check that the required tools are installed.
   apimend diff OLD NEW       Show breaking changes between two OpenAPI specs.
   apimend scan OLD NEW [DIR] Find the lines of code affected by those changes.
+  apimend fix OLD NEW [DIR]  Fix affected code, and prove the fix with your tests.
 """
 
 from __future__ import annotations
@@ -15,11 +16,12 @@ import sys
 from pathlib import Path
 
 from apimend import __version__
+from apimend.fix import FixError, apply_and_verify, plan_fixes, render_diff
 from apimend.scan import SpecError, find_changes, find_usages, load_spec
 
 # External tools apimend relies on, and how to install each one.
 REQUIRED_TOOLS = {
-    "oasdiff": "curl -fsSL https://raw.githubusercontent.com/oasdiff/oasdiff/main/install.sh | sudo sh",
+    "oasdiff": "bash .devcontainer/setup.sh",
     "prism": "npm install -g @stoplight/prism-cli",
 }
 
@@ -104,6 +106,59 @@ def cmd_scan(args: argparse.Namespace) -> int:
     return 1
 
 
+def cmd_fix(args: argparse.Namespace) -> int:
+    try:
+        old, new = load_spec(args.old), load_spec(args.new)
+    except SpecError as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        return 2
+    if not Path(args.path).is_dir():
+        print(f"Error: {args.path} is not a folder", file=sys.stderr)
+        return 2
+
+    changes = find_changes(old, new)
+    if not changes:
+        print("No breaking request changes found. Nothing to fix.")
+        return 0
+
+    edits = plan_fixes(changes, args.path, args.exclude)
+    if not edits:
+        if any(find_usages(args.path, change, args.exclude) for change in changes):
+            print("Your code is affected, but apimend has no automatic fix for these changes yet.")
+            print(f"Run 'apimend scan {args.old} {args.new} {args.path}' to see where.")
+            return 1
+        print("Your code does not appear to be affected. Nothing to fix.")
+        return 0
+
+    print(f"Proposed fix ({len(edits)} line(s)):\n")
+    print(render_diff(edits))
+    if not args.test:
+        print("Preview only: no files were changed.")
+        print('To apply and verify the fix, add --test "<command that runs your tests>".')
+        return 1
+
+    print(f"Applying the fix and verifying it with: {args.test}")
+    if not args.no_mock:
+        print(f"Tests will run against a mock of {args.new} on port {args.port}.")
+    try:
+        passed, output = apply_and_verify(
+            edits, args.test, args.new, args.port, use_mock=not args.no_mock
+        )
+    except FixError as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        print("No files were changed.", file=sys.stderr)
+        return 2
+
+    if passed:
+        print("\nVERIFIED: the tests passed, so the fix has been kept.")
+        print("Review the change with 'git diff' before committing it.")
+        return 0
+    print("\nNOT VERIFIED: the tests failed, so the fix was undone. No files were changed.")
+    print("\nLast lines of the test output:")
+    print("\n".join(output.strip().splitlines()[-20:]))
+    return 1
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="apimend",
@@ -132,6 +187,30 @@ def build_parser() -> argparse.ArgumentParser:
         help='skip files matching a pattern, e.g. "tests/*" (can be repeated)',
     )
     scan.set_defaults(func=cmd_scan)
+
+    fix = sub.add_parser("fix", help="fix affected code and prove the fix with your tests")
+    fix.add_argument("old", help="path to the old spec")
+    fix.add_argument("new", help="path to the new spec")
+    fix.add_argument("path", nargs="?", default=".", help="folder to fix (default: .)")
+    fix.add_argument(
+        "--test",
+        metavar="COMMAND",
+        help="command that runs your tests; without it apimend only previews the fix",
+    )
+    fix.add_argument(
+        "--port", type=int, default=4010, help="port for the mock API server (default: 4010)"
+    )
+    fix.add_argument(
+        "--no-mock", action="store_true", help="run the tests without starting a mock server"
+    )
+    fix.add_argument(
+        "--exclude",
+        action="append",
+        default=[],
+        metavar="PATTERN",
+        help='skip files matching a pattern, e.g. "tests/*" (can be repeated)',
+    )
+    fix.set_defaults(func=cmd_fix)
     return parser
 
 
