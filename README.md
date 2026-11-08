@@ -7,6 +7,7 @@
 **Dependabot for APIs** — catch breaking API changes before your users do.
 
 [![CI](https://github.com/sarathpanicker07/apimend/actions/workflows/ci.yml/badge.svg)](https://github.com/sarathpanicker07/apimend/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/sarathpanicker07/apimend)](https://github.com/sarathpanicker07/apimend/releases)
 [![License: Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 [![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue.svg)](pyproject.toml)
 [![Open in GitHub Codespaces](https://img.shields.io/badge/Open%20in-Codespaces-0F766E?logo=github)](https://codespaces.new/sarathpanicker07/apimend)
@@ -308,6 +309,9 @@ Ideas, bug reports and pull requests are welcome!
 1. Open an [issue](https://github.com/sarathpanicker07/apimend/issues) to discuss larger changes first.
 2. Fork the repo and open it in Codespaces — everything is set up for you.
 3. Make sure `pytest` and `ruff check .` pass before opening a pull request.
+## Changelog
+
+See [CHANGELOG.md](CHANGELOG.md) for what changed in each release.
 
 ## License
 
