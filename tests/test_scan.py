@@ -120,7 +120,6 @@ def test_scan_command_with_missing_spec_exits_2(capsys):
     assert "cannot read" in capsys.readouterr().err
 
 
-
 def test_rename_hint_only_goes_to_the_new_property():
     old = make_spec({"pizza": {}, "size": {}}, ["size"])
     new = make_spec({"pizza": {}, "pizza_size": {}}, ["pizza", "pizza_size"])
