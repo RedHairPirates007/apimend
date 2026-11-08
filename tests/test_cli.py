@@ -1,4 +1,5 @@
 import shutil
+from importlib.metadata import version
 from pathlib import Path
 
 import pytest
@@ -51,3 +52,7 @@ def test_diff_without_oasdiff_explains_and_exits_2(monkeypatch, capsys):
     monkeypatch.setattr(shutil, "which", lambda name: None)
     assert main(["diff", "old.yaml", "new.yaml"]) == 2
     assert "not installed" in capsys.readouterr().err
+
+
+def test_installed_package_version_matches_the_code():
+    assert version("apimend") == __version__

@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "apimend"
-version = "0.0.1"
+dynamic = ["version"]
 description = "Dependabot for APIs: detect breaking changes in the APIs you use, and only suggest fixes that pass tests."
 readme = "README.md"
 license = "Apache-2.0"
@@ -16,7 +16,8 @@ dev = ["pytest>=8", "ruff>=0.5"]
 
 [project.scripts]
 apimend = "apimend.cli:main"
-
+[tool.setuptools.dynamic]
+version = { attr = "apimend.__version__" }
 [tool.setuptools.packages.find]
 where = ["src"]
 
