@@ -1,8 +1,8 @@
-"""Fix code affected by breaking API changes, and prove each fix with tests.
+"""Fix code affected by breaking API changes, and keep a fix only when it is verified.
 
 For now apimend fixes one kind of change automatically: a request property that was
-renamed (for example `size` -> `pizza_size`). A fix is applied, the project's tests are
-run against a mock of the new API, and the fix is undone automatically if they fail.
+renamed (for example `size` -> `pizza_size`). A fix is applied and checked by
+`apimend.verify`; it is undone automatically unless the evidence supports keeping it.
 """
 
 from __future__ import annotations
@@ -10,17 +10,12 @@ from __future__ import annotations
 import ast
 import difflib
 import io
-import os
-import shlex
-import shutil
-import socket
-import subprocess
-import time
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from pathlib import Path
 
 from apimend.scan import NEW_REQUIRED_PROPERTY, REMOVED_PROPERTY, Change, find_usages
+from apimend.verify import TESTS_ONLY, UNVERIFIED, VERIFIED, Report, verify
 
 QUOTES = ("'", '"')
 
@@ -116,22 +111,25 @@ def plan_fixes(
             tree = ast.parse(file.read_text(encoding="utf-8"))
             source_lines = _read_lines(file)
             for node in _key_literals(tree, rename.old, lines):
+                start, end = node.col_offset, node.end_col_offset
+                if end is None or node.end_lineno != node.lineno:
+                    continue  # only literals that sit on a single line
                 text, _ = _split_ending(source_lines[node.lineno - 1])
-                raw = text.encode("utf-8")[node.col_offset : node.end_col_offset].decode("utf-8")
+                raw = text.encode("utf-8")[start:end].decode("utf-8")
                 # Only touch simple literals like "size" or 'size' (no prefixes or escapes).
                 if raw[:1] in QUOTES and raw == f"{raw[0]}{rename.old}{raw[0]}":
                     replacement = f"{raw[0]}{rename.new}{raw[0]}"
                     key = (file, node.lineno)
-                    span = (node.col_offset, node.end_col_offset, replacement)
+                    span = (start, end, replacement)
                     replacements.setdefault(key, []).append(span)
 
     edits = []
     for (file, line), spans in sorted(replacements.items()):
         text, _ = _split_ending(_read_lines(file)[line - 1])
-        raw = text.encode("utf-8")
+        data = text.encode("utf-8")  # ast column offsets count bytes, not characters
         for start, end, replacement in sorted(spans, reverse=True):  # right to left
-            raw = raw[:start] + replacement.encode("utf-8") + raw[end:]
-        edits.append(Edit(file, line, text, raw.decode("utf-8")))
+            data = data[:start] + replacement.encode("utf-8") + data[end:]
+        edits.append(Edit(file, line, text, data.decode("utf-8")))
     return edits
 
 
@@ -179,77 +177,28 @@ def restore(originals: dict[Path, bytes]) -> None:
         file.write_bytes(data)
 
 
-def _port_in_use(port: int) -> bool:
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
-        sock.settimeout(0.5)
-        return sock.connect_ex(("127.0.0.1", port)) == 0
-
-
-def start_mock(spec: str | Path, port: int, timeout: float = 60.0) -> subprocess.Popen:
-    """Start Prism as a mock of `spec` and wait until it accepts connections."""
-    if shutil.which("prism") is None:
-        raise FixError("Prism is not installed. Run 'apimend doctor' for help.")
-    if _port_in_use(port):
-        raise FixError(f"port {port} is already in use. Stop that program or use --port.")
-    process = subprocess.Popen(
-        ["prism", "mock", str(spec), "--port", str(port)],
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-    )
-    deadline = time.monotonic() + timeout
-    while time.monotonic() < deadline:
-        if process.poll() is not None:
-            raise FixError(f"Prism stopped unexpectedly. Is {spec} a valid spec?")
-        if _port_in_use(port):
-            return process
-        time.sleep(0.3)
-    stop_mock(process)
-    raise FixError(f"Prism did not start within {timeout:.0f} seconds")
-
-
-def stop_mock(process: subprocess.Popen) -> None:
-    process.terminate()
-    try:
-        process.wait(timeout=10)
-    except subprocess.TimeoutExpired:
-        process.kill()
-        process.wait()
-
-
-def run_tests(command: str, port: int, timeout: float = 600.0) -> tuple[bool, str]:
-    """Run the project's test command. Returns (passed, output)."""
-    env = {**os.environ, "APIMEND_MOCK_URL": f"http://127.0.0.1:{port}"}
-    try:
-        result = subprocess.run(
-            shlex.split(command),
-            capture_output=True,
-            text=True,
-            env=env,
-            timeout=timeout,
-            check=False,
-        )
-    except FileNotFoundError as exc:
-        raise FixError(f"test command not found: {exc.filename}") from exc
-    except subprocess.TimeoutExpired:
-        return False, f"tests did not finish within {timeout:.0f} seconds"
-    return result.returncode == 0, result.stdout + result.stderr
-
-
 def apply_and_verify(
-    edits: list[Edit], test_command: str, spec: str | Path, port: int, use_mock: bool = True
-) -> tuple[bool, str]:
-    """Apply `edits`, run the tests (against a mock of `spec`), and undo on failure."""
+    edits: list[Edit],
+    test_command: str,
+    spec: str | Path,
+    port: int,
+    use_mock: bool = True,
+    allow_unverified: bool = False,
+    recheck: Callable[[], int] | None = None,
+) -> tuple[Report, bool]:
+    """Apply `edits`, verify them, and undo them unless the evidence supports keeping them.
+
+    Returns the verification report and whether the fix was kept.
+    """
     originals = apply_edits(edits)
     try:
-        mock = start_mock(spec, port) if use_mock else None
-        try:
-            passed, output = run_tests(test_command, port)
-        finally:
-            if mock is not None:
-                stop_mock(mock)
+        report = verify(test_command, spec, port, use_mock=use_mock, recheck=recheck)
     except BaseException:
         restore(originals)
         raise
-    if not passed:
+    keep = report.verdict in (VERIFIED, TESTS_ONLY) or (
+        report.verdict == UNVERIFIED and allow_unverified
+    )
+    if not keep:
         restore(originals)
-    return passed, output
+    return report, keep

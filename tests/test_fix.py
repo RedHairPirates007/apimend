@@ -101,7 +101,7 @@ def test_failed_verification_undoes_the_fix(lab, capsys):
 def test_passing_verification_keeps_the_fix(lab, capsys):
     passing = f"{PYTHON} -c 'pass'"
     assert main(fix_args(lab, "--no-mock", "--test", passing)) == 0
-    assert "VERIFIED" in capsys.readouterr().out
+    assert "TESTS PASSED (requests not checked against the spec)" in capsys.readouterr().out
     assert '"pizza_size": size' in (lab / "app" / "pizza_client.py").read_text()
 
 
@@ -116,6 +116,17 @@ def test_setup_problems_change_nothing(lab, capsys):
     assert (lab / "app" / "pizza_client.py").read_bytes() == before
 
 
+def test_preview_marks_a_missing_final_newline_like_git(tmp_path):
+    (tmp_path / "client.py").write_text('post("/orders", {"size": 1})')  # no final newline
+    diff = render_diff(plan_fixes(RENAME_CHANGES, tmp_path))
+    assert diff.splitlines()[-4:] == [
+        '-post("/orders", {"size": 1})',
+        "\\ No newline at end of file",
+        '+post("/orders", {"pizza_size": 1})',
+        "\\ No newline at end of file",
+    ]
+
+
 @pytest.mark.skipif(shutil.which("prism") is None, reason="Prism not installed")
 def test_end_to_end_fix_is_verified_against_a_mock_of_the_new_api(lab, monkeypatch):
     port = free_port()
@@ -126,14 +137,3 @@ def test_end_to_end_fix_is_verified_against_a_mock_of_the_new_api(lab, monkeypat
     assert '"pizza_size": size' in (app / "pizza_client.py").read_text()
     scan = ["scan", str(lab / "v1.yaml"), str(lab / "v2.yaml"), str(app)]
     assert main(scan) == 0  # nothing left to fix
-
-
-def test_preview_marks_a_missing_final_newline_like_git(tmp_path):
-    (tmp_path / "client.py").write_text('post("/orders", {"size": 1})')  # no final newline
-    diff = render_diff(plan_fixes(RENAME_CHANGES, tmp_path))
-    assert diff.splitlines()[-4:] == [
-        '-post("/orders", {"size": 1})',
-        "\\ No newline at end of file",
-        '+post("/orders", {"pizza_size": 1})',
-        "\\ No newline at end of file",
-    ]
