@@ -162,7 +162,7 @@ def cmd_fix(args: argparse.Namespace) -> int:
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="apimend",
-        description="Dependabot for APIs: find breaking API changes and fix them safely.",
+        description="Catch breaking OpenAPI changes in your code, and fix them safely.",
     )
     parser.add_argument("--version", action="version", version=f"apimend {__version__}")
     sub = parser.add_subparsers(dest="command", required=True)

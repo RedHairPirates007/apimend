@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "apimend"
 dynamic = ["version"]
-description = "Dependabot for APIs: detect breaking changes in the APIs you use, and only suggest fixes that pass tests."
+description = "Catch breaking OpenAPI changes in your code, and fix them safely."
 readme = "README.md"
 license = "Apache-2.0"
 requires-python = ">=3.10"

@@ -4,7 +4,7 @@
 
 # apimend
 
-**Dependabot for APIs** — catch breaking API changes before your users do.
+**Catch breaking OpenAPI changes in your code — and fix them safely.**
 
 [![CI](https://github.com/sarathpanicker07/apimend/actions/workflows/ci.yml/badge.svg)](https://github.com/sarathpanicker07/apimend/actions/workflows/ci.yml)
 [![Release](https://img.shields.io/github/v/release/sarathpanicker07/apimend)](https://github.com/sarathpanicker07/apimend/releases)
@@ -23,9 +23,12 @@
 ---
 
 > [!NOTE]
-> apimend is in **early development**. It can detect breaking changes, locate affected code,
-> and fix renamed request properties with test verification today. More kinds of fixes are on
-> the [roadmap](#roadmap).
+> apimend is in **early development**. Today it is a command-line tool: you give it two
+> versions of an OpenAPI spec, and it finds and fixes affected **Python** code. See
+> [what works today](#what-works-today) for the exact scope.
+>
+> **Vision:** a "Dependabot for APIs" that watches the APIs you depend on and opens verified
+> pull requests automatically. That experience is on the [roadmap](#roadmap), not built yet.
 
 ## Why apimend?
 
@@ -33,14 +36,22 @@ Your app depends on outside APIs: payments, AI models, messaging and more. When 
 changes its API, your app can break **without a single line of your code changing** — and
 teams usually find out in production.
 
-apimend closes that gap:
+apimend aims to close that gap.
 
-| | Capability | Status |
-|:-:|---|:-:|
-| 🔍 | **Detect** breaking changes between two versions of an API spec | ✅ Available |
-| 📍 | **Locate** the exact lines of your code each change affects | ✅ Available |
-| 🛠️ | **Fix** the affected code automatically | ✅ Renames |
-| ✅ | **Verify** every fix against a mock of the new API before keeping it | ✅ Available |
+### What works today
+
+| Capability | Status | Scope today |
+|---|:-:|---|
+| Compare two OpenAPI specs | ✅ Available | Specs you provide (YAML or JSON) |
+| Detect breaking changes | ✅ Available | Via [oasdiff](https://github.com/oasdiff/oasdiff) |
+| Find affected code | ✅ Available | **Python only**; request bodies and removed endpoints; paths written as plain strings |
+| Detect renamed properties | 🟡 Limited | One removed + one new required property on the same endpoint |
+| Fix code automatically | 🟡 Limited | Renamed request properties only |
+| Verify fixes | ✅ Available | Your tests against a **mock generated from the new spec** — not the live API |
+| JavaScript / TypeScript and other languages | 🗺️ Roadmap | |
+| Response-change detection | 🗺️ Roadmap | |
+| Automatic pull requests | 🗺️ Roadmap | |
+| Provider monitoring | 🗺️ Roadmap | You currently supply both spec versions yourself |
 
 > [!TIP]
 > **What makes apimend different:** a fix is only kept after your tests pass against a mock
@@ -88,7 +99,7 @@ Checks that every tool apimend needs is installed.
 
 ```console
 $ apimend doctor
-apimend 0.0.1
+apimend 0.1.1
 python  3.12.11
   [ok]      oasdiff
   [ok]      prism
@@ -155,9 +166,9 @@ Found 1 affected line(s) in 1 file(s).
 
 ### `apimend fix <old-spec> <new-spec> [folder] --test "<command>"`
 
-Fixes affected code and **proves the fix works**: it applies the change, runs your tests
-against a [Prism](https://github.com/stoplightio/prism) mock of the **new** API, and keeps the
-fix only if they pass.
+Fixes affected code and **checks the fix**: it applies the change, runs your tests against a
+[Prism](https://github.com/stoplightio/prism) mock of the **new** API, and keeps the fix only
+if they pass.
 
 ```console
 $ apimend fix lab/pizza-api/v1.yaml lab/pizza-api/v2.yaml lab/pizza-api/app --test "python -m pytest lab/pizza-api/app -q"
@@ -201,6 +212,13 @@ Review the change with 'git diff' before committing it.
 > `fix` currently repairs **renamed request properties** in Python code (dictionary keys such
 > as `{"size": ...}` and lookups such as `body["size"]`). It only acts when the rename is
 > unambiguous.
+
+> [!WARNING]
+> **What "verified" means today:** your tests passed against a mock generated from the new
+> spec. That shows your code matches the spec — it does **not** prove the fix works against
+> the live provider (authentication, rate limits, real error responses and data can differ),
+> and it only means something if your tests actually call the API. Clearer verification
+> reports are planned for v0.2.0.
 
 ## How it works
 
@@ -249,7 +267,7 @@ python -m pytest lab/pizza-api/app -v     # 2 passed
 Stop Prism (<kbd>Ctrl</kbd>+<kbd>C</kbd>), start it again with `v2.yaml`, and rerun the tests.
 The order test now fails with `HTTP Error 422` — the app broke without any change to its code.
 
-Stop Prism again, then let apimend repair the app and prove the repair works:
+Stop Prism again, then let apimend repair the app and check the repair against the v2 mock:
 
 ```bash
 apimend fix lab/pizza-api/v1.yaml lab/pizza-api/v2.yaml lab/pizza-api/app --test "python -m pytest lab/pizza-api/app -q"
@@ -293,14 +311,36 @@ apimend/
 
 ## Roadmap
 
+**v0.1 — Core loop (done)**
+
 - [x] Detect breaking changes between two OpenAPI specs (`apimend diff`)
-- [x] Environment checks (`apimend doctor`), test suite, dev container and CI
-- [x] `apimend scan` — find the exact lines of Python code a breaking change affects
-- [x] `apimend fix` — fix renamed request properties and verify against a mock of the new API
-- [ ] More automatic fixes (for example AI-assisted), kept behind the same test gate
-- [ ] `scan` support for more languages (JavaScript/TypeScript) and response changes
-- [ ] Real-world benchmark using past API migrations from public repositories
-- [ ] GitHub Action / App that opens verified pull requests automatically
+- [x] Find affected Python code (`apimend scan`) and fix renamed request properties (`apimend fix`)
+- [x] Test suite, dev container, CI and honest documentation of scope
+
+**v0.2 — Trustworthy foundations**
+
+- [ ] Verification reports that show what was actually checked (requests that reached the
+      mock, whether they matched the spec) and never over-claim
+- [ ] Confidence scores for affected code (high / medium / low)
+- [ ] Language-adapter architecture, so new languages plug into the same core
+- [ ] Real-world benchmark on public API specs and repositories, with published results
+
+**v0.3 — Reach**
+
+- [ ] JavaScript / TypeScript support
+- [ ] Response-change detection
+- [ ] Smarter rename detection (types, enums, several renames at once)
+
+**v0.4 — Automation ("Dependabot for APIs")**
+
+- [ ] GitHub Action: comments on pull requests and opens verified fix pull requests
+- [ ] Provider monitoring: detect new API versions automatically
+
+**Later**
+
+- [ ] Go, Java and C# support
+- [ ] Optional verification against a provider's sandbox environment
+- [ ] More automatic fixes (including AI-assisted), kept behind the same verification gate
 
 ## Contributing
 
@@ -309,6 +349,7 @@ Ideas, bug reports and pull requests are welcome!
 1. Open an [issue](https://github.com/sarathpanicker07/apimend/issues) to discuss larger changes first.
 2. Fork the repo and open it in Codespaces — everything is set up for you.
 3. Make sure `pytest` and `ruff check .` pass before opening a pull request.
+
 ## Changelog
 
 See [CHANGELOG.md](CHANGELOG.md) for what changed in each release.
