@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `apimend fix` prints a verification report listing exactly what was checked: tests,
+  every request your tests sent to the mock (and whether it matched the new spec), a re-scan
+  for remaining affected code, and what was not checked (the live API).
+- `--allow-unverified` keeps a fix even when the tests never called the mock API.
+
+### Changed
+
+- A fix is now kept only when the evidence supports it. Tests that pass without calling the
+  API give `UNVERIFIED`, and requests that do not match the new spec give `NOT VERIFIED`; in
+  both cases the fix is undone.
+- With `--no-mock`, a passing run is reported as `TESTS PASSED` instead of `VERIFIED`.
+
 ## [0.1.1] - 2026-11-09
 
 ### Changed

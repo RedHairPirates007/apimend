@@ -47,7 +47,7 @@ apimend aims to close that gap.
 | Find affected code | ✅ Available | **Python only**; request bodies and removed endpoints; paths written as plain strings |
 | Detect renamed properties | 🟡 Limited | One removed + one new required property on the same endpoint |
 | Fix code automatically | 🟡 Limited | Renamed request properties only |
-| Verify fixes | ✅ Available | Your tests against a **mock generated from the new spec** — not the live API |
+| Verify fixes | ✅ Available | Records every request your tests send to a **mock generated from the new spec** and checks it matches — not the live API |
 | JavaScript / TypeScript and other languages | 🗺️ Roadmap | |
 | Response-change detection | 🗺️ Roadmap | |
 | Automatic pull requests | 🗺️ Roadmap | |
@@ -167,8 +167,9 @@ Found 1 affected line(s) in 1 file(s).
 ### `apimend fix <old-spec> <new-spec> [folder] --test "<command>"`
 
 Fixes affected code and **checks the fix**: it applies the change, runs your tests against a
-[Prism](https://github.com/stoplightio/prism) mock of the **new** API, and keeps the fix only
-if they pass.
+[Prism](https://github.com/stoplightio/prism) mock of the **new** API, and records every request
+your tests send. The fix is kept only if the tests pass **and** every request matches the new
+spec.
 
 ```console
 $ apimend fix lab/pizza-api/v1.yaml lab/pizza-api/v2.yaml lab/pizza-api/app --test "python -m pytest lab/pizza-api/app -q"
@@ -188,7 +189,15 @@ Proposed fix (1 line(s)):
 Applying the fix and verifying it with: python -m pytest lab/pizza-api/app -q
 Tests will run against a mock of lab/pizza-api/v2.yaml on port 4010.
 
-VERIFIED: the tests passed, so the fix has been kept.
+Verification report
+  [passed] Tests
+  [passed] Contract: 2 request(s) reached the mock, all matched the spec
+             GET /menu -> 200: matches the new spec
+             POST /orders -> 201: matches the new spec
+  [passed] Re-scan: no affected code remains
+  [not checked] Live API behaviour: authentication, rate limits, real data and errors
+
+VERIFIED against the new spec: the fix has been kept.
 Review the change with 'git diff' before committing it.
 ```
 
@@ -196,7 +205,8 @@ Review the change with 'git diff' before committing it.
 |---|---|
 | `--test "<command>"` | Command that runs your tests. **Without it, `fix` only previews** and changes nothing. |
 | `--port <number>` | Port for the mock server (default `4010`). The URL is also passed to your tests as `APIMEND_MOCK_URL`. |
-| `--no-mock` | Run the tests without starting a mock server. |
+| `--no-mock` | Run the tests without starting a mock server (requests are then not checked). |
+| `--allow-unverified` | Keep the fix even if your tests never called the mock API. |
 | `--exclude "<pattern>"` | Skip matching files, as in `scan`. |
 
 **Safety first:**
@@ -205,8 +215,24 @@ Review the change with 'git diff' before committing it.
   line endings and non-English text are preserved.
 - If the tests fail, a setup problem occurs (busy port, Prism missing), or you press
   <kbd>Ctrl</kbd>+<kbd>C</kbd>, every file is restored byte for byte.
-- Exit codes: `0` fixed and verified (or nothing to fix), `1` preview only or tests failed,
+- Exit codes: `0` fix kept (or nothing to fix), `1` preview only, or the fix was undone,
   `2` could not run.
+
+**The verification report** lists exactly what was checked:
+
+| Check | Passes when |
+|---|---|
+| Tests | Your test command succeeds |
+| Contract | Your tests sent at least one request to the mock, and **every** request matched the new spec |
+| Re-scan | No affected code remains after the fix |
+| Live API behaviour | **Never checked** — authentication, rate limits, real data and errors can differ |
+
+| Result | Meaning | Fix kept? |
+|---|---|:-:|
+| `VERIFIED` | Tests passed and every request matched the new spec | ✅ |
+| `TESTS PASSED` | Tests passed; requests were not checked (`--no-mock`) | ✅ |
+| `UNVERIFIED` | Tests passed but never called the API | ❌ (✅ with `--allow-unverified`) |
+| `NOT VERIFIED` | Tests failed, or a request did not match the new spec | ❌ |
 
 > [!NOTE]
 > `fix` currently repairs **renamed request properties** in Python code (dictionary keys such
@@ -214,11 +240,9 @@ Review the change with 'git diff' before committing it.
 > unambiguous.
 
 > [!WARNING]
-> **What "verified" means today:** your tests passed against a mock generated from the new
-> spec. That shows your code matches the spec — it does **not** prove the fix works against
-> the live provider (authentication, rate limits, real error responses and data can differ),
-> and it only means something if your tests actually call the API. Clearer verification
-> reports are planned for v0.2.0.
+> **What `VERIFIED` means:** your tests passed, and every request they sent matched the new
+> spec. It does **not** prove the fix works against the live provider — authentication, rate
+> limits, real error responses and data can differ from what the spec describes.
 
 ## How it works
 
@@ -301,8 +325,9 @@ apimend/
 ├── src/apimend/          The apimend package
 │   ├── __init__.py
 │   ├── cli.py            Command-line interface (doctor, diff, scan, fix)
-│   ├── fix.py            Applies fixes and verifies them with your tests
-│   └── scan.py           Finds code affected by breaking changes
+│   ├── fix.py            Plans and applies fixes, undoing them unless verified
+│   ├── scan.py           Finds code affected by breaking changes
+│   └── verify.py         Mock server, request recording and verification reports
 ├── tests/                Tests for apimend itself
 └── pyproject.toml        Package metadata and tool settings
 ```
@@ -319,7 +344,7 @@ apimend/
 
 **v0.2 — Trustworthy foundations**
 
-- [ ] Verification reports that show what was actually checked (requests that reached the
+- [x] Verification reports that show what was actually checked (requests that reached the
       mock, whether they matched the spec) and never over-claim
 - [ ] Confidence scores for affected code (high / medium / low)
 - [ ] Language-adapter architecture, so new languages plug into the same core
