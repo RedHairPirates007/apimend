@@ -18,6 +18,7 @@ from pathlib import Path
 from apimend import __version__
 from apimend.fix import FixError, apply_and_verify, plan_fixes, render_diff
 from apimend.scan import SpecError, find_changes, find_usages, load_spec
+from apimend.verify import FAILED, TESTS_ONLY, UNVERIFIED, VERIFIED, Report, VerifyError
 
 # External tools apimend relies on, and how to install each one.
 REQUIRED_TOOLS = {
@@ -140,23 +141,79 @@ def cmd_fix(args: argparse.Namespace) -> int:
     print(f"Applying the fix and verifying it with: {args.test}")
     if not args.no_mock:
         print(f"Tests will run against a mock of {args.new} on port {args.port}.")
+
+    def remaining_lines() -> int:
+        found = {(u.file, u.line) for c in changes for u in find_usages(args.path, c, args.exclude)}
+        return len(found)
+
     try:
-        passed, output = apply_and_verify(
-            edits, args.test, args.new, args.port, use_mock=not args.no_mock
+        report, kept = apply_and_verify(
+            edits,
+            args.test,
+            args.new,
+            args.port,
+            use_mock=not args.no_mock,
+            allow_unverified=args.allow_unverified,
+            recheck=remaining_lines,
         )
-    except FixError as exc:
+    except (FixError, VerifyError) as exc:
         print(f"Error: {exc}", file=sys.stderr)
         print("No files were changed.", file=sys.stderr)
         return 2
 
-    if passed:
-        print("\nVERIFIED: the tests passed, so the fix has been kept.")
-        print("Review the change with 'git diff' before committing it.")
-        return 0
-    print("\nNOT VERIFIED: the tests failed, so the fix was undone. No files were changed.")
-    print("\nLast lines of the test output:")
-    print("\n".join(output.strip().splitlines()[-20:]))
-    return 1
+    print_report(report, args.new)
+    return print_outcome(report, kept)
+
+
+def print_report(report: Report, spec: str) -> None:
+    """Print exactly what verification checked, and what it found."""
+    print("\nVerification report")
+    print(f"  [{'passed' if report.tests_passed else 'FAILED'}] Tests")
+    if not report.mock_used:
+        print("  [skipped] Contract: --no-mock was used, so requests were not checked")
+    elif not report.requests:
+        print(f"  [FAILED] Contract: your tests made no requests to the mock of {spec}")
+    else:
+        total, bad = len(report.requests), len(report.mismatches)
+        if bad:
+            print(f"  [FAILED] Contract: {bad} of {total} request(s) did not match the new spec")
+        else:
+            print(f"  [passed] Contract: {total} request(s) reached the mock, all matched the spec")
+        for request in report.requests[:10]:
+            print(f"             {request.describe()}")
+        if total > 10:
+            print(f"             ... and {total - 10} more")
+    if report.remaining:
+        print(f"  [note] Re-scan: {report.remaining} affected line(s) remain (no automatic fix)")
+    else:
+        print("  [passed] Re-scan: no affected code remains")
+    print("  [not checked] Live API behaviour: authentication, rate limits, real data and errors")
+
+
+def print_outcome(report: Report, kept: bool) -> int:
+    """Explain the decision and return the exit code."""
+    verdict = report.verdict
+    if verdict == VERIFIED:
+        print("\nVERIFIED against the new spec: the fix has been kept.")
+    elif verdict == TESTS_ONLY:
+        print("\nTESTS PASSED (requests not checked against the spec): the fix has been kept.")
+    elif verdict == UNVERIFIED and kept:
+        print("\nUNVERIFIED: kept anyway because --allow-unverified was used.")
+    elif verdict == UNVERIFIED:
+        print("\nUNVERIFIED: your tests passed but never called the API. The fix was undone.")
+        print("Point your API client at $APIMEND_MOCK_URL during tests, or re-run with")
+        print("--allow-unverified to keep the fix without verification.")
+        return 1
+    elif verdict == FAILED and report.tests_passed:
+        print("\nNOT VERIFIED: some requests did not match the new spec. The fix was undone.")
+        return 1
+    else:
+        print("\nNOT VERIFIED: the tests failed, so the fix was undone. No files were changed.")
+        print("\nLast lines of the test output:")
+        print("\n".join(report.test_output.strip().splitlines()[-20:]))
+        return 1
+    print("Review the change with 'git diff' before committing it.")
+    return 0
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -202,6 +259,11 @@ def build_parser() -> argparse.ArgumentParser:
     )
     fix.add_argument(
         "--no-mock", action="store_true", help="run the tests without starting a mock server"
+    )
+    fix.add_argument(
+        "--allow-unverified",
+        action="store_true",
+        help="keep the fix even if your tests never called the mock API",
     )
     fix.add_argument(
         "--exclude",
