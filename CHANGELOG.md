@@ -36,6 +36,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - CI runs with read-only permissions and does not keep a GitHub token on disk.
 - The development setup pins Prism to an exact version and verifies the oasdiff download
   against its official SHA-256 checksum before installing it.
+- The verification proxy removes line breaks from the headers it passes on from the mock,
+  so a header can never be split into extra headers (HTTP response splitting, reported by
+  CodeQL). It also no longer sends the `Date` and `Server` headers twice.
 
 ## [0.1.1] - 2026-11-09
 
