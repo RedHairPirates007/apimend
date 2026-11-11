@@ -29,6 +29,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `fix` only changes lines found with high confidence by default, and lists the others for
   review instead of editing them.
 
+### Security
+
+- Added a security policy (`SECURITY.md`) with private vulnerability reporting.
+- Dependabot now monitors Python dependencies and GitHub Actions.
+- CI runs with read-only permissions and does not keep a GitHub token on disk.
+- The development setup pins Prism to an exact version and verifies the oasdiff download
+  against its official SHA-256 checksum before installing it.
+
 ## [0.1.1] - 2026-11-09
 
 ### Changed

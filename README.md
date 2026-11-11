@@ -400,6 +400,12 @@ Ideas, bug reports and pull requests are welcome!
 2. Fork the repo and open it in Codespaces — everything is set up for you.
 3. Make sure `pytest` and `ruff check .` pass before opening a pull request.
 
+## Security
+
+Found a security problem? Please report it privately, as described in
+[SECURITY.md](SECURITY.md), which also explains what apimend does and does not do on your
+machine.
+
 ## Changelog
 
 See [CHANGELOG.md](CHANGELOG.md) for what changed in each release.
