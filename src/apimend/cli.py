@@ -16,8 +16,19 @@ import sys
 from pathlib import Path
 
 from apimend import __version__
-from apimend.fix import FixError, apply_and_verify, plan_fixes, render_diff
-from apimend.scan import SpecError, find_changes, find_usages, load_spec
+from apimend.fix import FixError, apply_and_verify, plan_fixes, rename_usages, render_diff
+from apimend.scan import (
+    CONFIDENCE_LEVELS,
+    HIGH,
+    LOW,
+    MEDIUM,
+    SpecError,
+    Usage,
+    confidence_rank,
+    find_changes,
+    find_usages,
+    load_spec,
+)
 from apimend.verify import FAILED, TESTS_ONLY, UNVERIFIED, VERIFIED, Report, VerifyError
 
 # External tools apimend relies on, and how to install each one.
@@ -71,6 +82,14 @@ def cmd_diff(args: argparse.Namespace) -> int:
     return 2
 
 
+def print_usage(usage: Usage) -> None:
+    """Print one affected line with its confidence, and why it is not high."""
+    label = f"[{usage.confidence}]".ljust(8)
+    print(f"  {label} {usage.file}:{usage.line}: {usage.code}")
+    for reason in usage.reasons:
+        print(f"           - {reason}")
+
+
 def cmd_scan(args: argparse.Namespace) -> int:
     try:
         old, new = load_spec(args.old), load_spec(args.new)
@@ -87,23 +106,40 @@ def cmd_scan(args: argparse.Namespace) -> int:
         return 0
 
     print(f"Scanning {args.path} for code affected by {len(changes)} breaking change(s)...")
-    affected: set[tuple[Path, int]] = set()
+    threshold = confidence_rank(args.min_confidence)
+    affected: dict[tuple[Path, int], str] = {}  # line -> strongest confidence shown
+    hidden: set[tuple[Path, int]] = set()
     for change in changes:
         print(f"\n{change.describe()}")
         if change.hint:
             print(f"  hint: {change.hint}")
         usages = find_usages(args.path, change, args.exclude)
+        shown = [u for u in usages if confidence_rank(u.confidence) >= threshold]
+        hidden.update((u.file, u.line) for u in usages if u not in shown)
         if not usages:
             print("  no affected code found")
-        for usage in usages:
-            print(f"  {usage.file}:{usage.line}: {usage.code}")
-            affected.add((usage.file, usage.line))
+        elif not shown:
+            print(f"  no affected code with {args.min_confidence} confidence or above")
+        for usage in shown:
+            print_usage(usage)
+            key = (usage.file, usage.line)
+            strongest = affected.get(key, usage.confidence)
+            affected[key] = max(strongest, usage.confidence, key=confidence_rank)
 
+    hidden -= affected.keys()
+    if hidden:
+        print(
+            f"\n{len(hidden)} line(s) with lower confidence were hidden"
+            f" by --min-confidence {args.min_confidence}."
+        )
     if not affected:
         print("\nYour code does not appear to be affected.")
         return 0
     files = {file for file, _ in affected}
-    print(f"\nFound {len(affected)} affected line(s) in {len(files)} file(s).")
+    counts = ", ".join(
+        f"{list(affected.values()).count(level)} {level}" for level in reversed(CONFIDENCE_LEVELS)
+    )
+    print(f"\nFound {len(affected)} affected line(s) in {len(files)} file(s): {counts} confidence.")
     return 1
 
 
@@ -122,8 +158,18 @@ def cmd_fix(args: argparse.Namespace) -> int:
         print("No breaking request changes found. Nothing to fix.")
         return 0
 
-    edits = plan_fixes(changes, args.path, args.exclude)
+    edits = plan_fixes(changes, args.path, args.exclude, args.min_confidence)
+    threshold = confidence_rank(args.min_confidence)
+    skipped = [
+        usage
+        for _, usage in rename_usages(changes, args.path, args.exclude)
+        if confidence_rank(usage.confidence) < threshold
+    ]
     if not edits:
+        if skipped:
+            print(f"apimend found lines to fix, but none with {args.min_confidence} confidence.")
+            print_skipped(skipped, args.min_confidence)
+            return 1
         if any(find_usages(args.path, change, args.exclude) for change in changes):
             print("Your code is affected, but apimend has no automatic fix for these changes yet.")
             print(f"Run 'apimend scan {args.old} {args.new} {args.path}' to see where.")
@@ -131,8 +177,11 @@ def cmd_fix(args: argparse.Namespace) -> int:
         print("Your code does not appear to be affected. Nothing to fix.")
         return 0
 
-    print(f"Proposed fix ({len(edits)} line(s)):\n")
+    print(f"Proposed fix ({len(edits)} line(s), {args.min_confidence} confidence or above):\n")
     print(render_diff(edits))
+    if skipped:
+        print_skipped(skipped, args.min_confidence)
+        print()
     if not args.test:
         print("Preview only: no files were changed.")
         print('To apply and verify the fix, add --test "<command that runs your tests>".')
@@ -165,6 +214,15 @@ def cmd_fix(args: argparse.Namespace) -> int:
     return print_outcome(report, kept)
 
 
+def print_skipped(skipped: list[Usage], min_confidence: str) -> None:
+    """List lines apimend is not sure enough about to change on its own."""
+    print(f"Not changed, because the confidence is below {min_confidence} (review these yourself):")
+    for usage in skipped:
+        print_usage(usage)
+    if min_confidence == HIGH and any(usage.confidence == MEDIUM for usage in skipped):
+        print("If the medium ones look right, re-run with --min-confidence medium.")
+
+
 def print_report(report: Report, spec: str) -> None:
     """Print exactly what verification checked, and what it found."""
     print("\nVerification report")
@@ -184,7 +242,7 @@ def print_report(report: Report, spec: str) -> None:
         if total > 10:
             print(f"             ... and {total - 10} more")
     if report.remaining:
-        print(f"  [note] Re-scan: {report.remaining} affected line(s) remain (no automatic fix)")
+        print(f"  [note] Re-scan: {report.remaining} affected line(s) remain for you to review")
     else:
         print("  [passed] Re-scan: no affected code remains")
     print("  [not checked] Live API behaviour: authentication, rate limits, real data and errors")
@@ -243,6 +301,12 @@ def build_parser() -> argparse.ArgumentParser:
         metavar="PATTERN",
         help='skip files matching a pattern, e.g. "tests/*" (can be repeated)',
     )
+    scan.add_argument(
+        "--min-confidence",
+        choices=CONFIDENCE_LEVELS,
+        default=LOW,
+        help="only show lines found with at least this confidence (default: low, show all)",
+    )
     scan.set_defaults(func=cmd_scan)
 
     fix = sub.add_parser("fix", help="fix affected code and prove the fix with your tests")
@@ -271,6 +335,12 @@ def build_parser() -> argparse.ArgumentParser:
         default=[],
         metavar="PATTERN",
         help='skip files matching a pattern, e.g. "tests/*" (can be repeated)',
+    )
+    fix.add_argument(
+        "--min-confidence",
+        choices=CONFIDENCE_LEVELS,
+        default=HIGH,
+        help="only change lines found with at least this confidence (default: high)",
     )
     fix.set_defaults(func=cmd_fix)
     return parser

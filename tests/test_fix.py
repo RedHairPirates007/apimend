@@ -137,3 +137,52 @@ def test_end_to_end_fix_is_verified_against_a_mock_of_the_new_api(lab, monkeypat
     assert '"pizza_size": size' in (app / "pizza_client.py").read_text()
     scan = ["scan", str(lab / "v1.yaml"), str(lab / "v2.yaml"), str(app)]
     assert main(scan) == 0  # nothing left to fix
+
+
+# --- confidence --------------------------------------------------------------
+
+SPLIT_CLIENT = (
+    "import requests\n"
+    "def build(size):\n"
+    '    return {"size": size}\n'
+    "def send(body):\n"
+    '    return requests.post("/orders", json=body)\n'
+)
+
+
+def test_lines_below_the_minimum_confidence_are_not_changed(tmp_path):
+    (tmp_path / "client.py").write_text(SPLIT_CLIENT)  # "size" is found with medium confidence
+    assert plan_fixes(RENAME_CHANGES, tmp_path) == []
+    [edit] = plan_fixes(RENAME_CHANGES, tmp_path, min_confidence="medium")
+    assert edit.after.strip() == 'return {"pizza_size": size}'
+
+
+def test_fix_lists_lines_it_is_not_sure_enough_to_change(lab, capsys):
+    (lab / "app" / "helpers.py").write_text(SPLIT_CLIENT)
+    assert main(fix_args(lab)) == 1  # preview only
+    out = capsys.readouterr().out
+    assert "Proposed fix (1 line(s), high confidence or above):" in out
+    assert "Not changed, because the confidence is below high" in out
+    assert "helpers.py:3:" in out
+    assert "If the medium ones look right, re-run with --min-confidence medium." in out
+    assert 'return {"size": size}' in (lab / "app" / "helpers.py").read_text()
+
+
+def test_fix_explains_when_nothing_is_confident_enough(tmp_path, capsys):
+    (tmp_path / "client.py").write_text(SPLIT_CLIENT)
+    args = ["fix", str(LAB / "v1.yaml"), str(LAB / "v2.yaml"), str(tmp_path)]
+    assert main(args) == 1
+    out = capsys.readouterr().out
+    assert "apimend found lines to fix, but none with high confidence." in out
+    assert "Proposed fix" not in out
+
+
+def test_fix_never_suggests_changing_low_confidence_lines(tmp_path, capsys):
+    (tmp_path / "client.py").write_text(
+        'import requests\ndef orders():\n    return requests.get("/orders", params={"size": 1})\n'
+    )
+    args = ["fix", str(LAB / "v1.yaml"), str(LAB / "v2.yaml"), str(tmp_path)]
+    assert main(args) == 1
+    out = capsys.readouterr().out
+    assert "[low]" in out
+    assert "--min-confidence" not in out

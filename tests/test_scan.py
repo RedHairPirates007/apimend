@@ -4,11 +4,15 @@ import pytest
 
 from apimend.cli import main
 from apimend.scan import (
+    HIGH,
+    LOW,
+    MEDIUM,
     NEW_REQUIRED_PROPERTY,
     REMOVED_ENDPOINT,
     REMOVED_PROPERTY,
     Change,
     SpecError,
+    confidence_rank,
     find_changes,
     find_usages,
     load_spec,
@@ -108,7 +112,8 @@ def test_scan_command_reports_affected_code(capsys):
     out = capsys.readouterr().out
     assert "request property 'size' was removed" in out
     assert "pizza_client.py:" in out
-    assert "Found 1 affected line(s) in 1 file(s)." in out
+    assert "[high]   " in out
+    assert "Found 1 affected line(s) in 1 file(s): 1 high, 0 medium, 0 low confidence." in out
 
 
 def test_scan_command_with_identical_specs_exits_0(capsys):
@@ -134,3 +139,110 @@ def test_files_already_sending_a_new_required_property_are_not_flagged(tmp_path)
     (tmp_path / "new.py").write_text('post("/orders", {"pizza_size": 1})\n')
     change = Change("POST", "/orders", NEW_REQUIRED_PROPERTY, "pizza_size")
     assert [u.file.name for u in find_usages(tmp_path, change)] == ["old.py"]
+
+
+# --- confidence levels -------------------------------------------------------
+
+SIZE_REMOVED = Change("POST", "/orders", REMOVED_PROPERTY, "size")
+
+CLIENT = """\
+import requests
+
+def place(size):
+    return requests.post("https://api.example.com/orders", json={"size": size})
+
+def list_orders():
+    return requests.get("/orders", params={"size": "large"})
+
+def describe(size):
+    return "size: " + size
+
+LABEL = "size"
+"""
+
+
+def confidence_by_line(usages):
+    return {u.line: u.confidence for u in usages}
+
+
+def test_confidence_levels_are_ordered():
+    assert confidence_rank(LOW) < confidence_rank(MEDIUM) < confidence_rank(HIGH)
+
+
+def test_the_lab_rename_is_found_with_high_confidence():
+    [usage] = find_usages(APP, SIZE_REMOVED)
+    assert usage.confidence == HIGH
+    assert usage.reasons == ()
+
+
+def test_confidence_reflects_how_the_property_is_used(tmp_path):
+    (tmp_path / "client.py").write_text(CLIENT)
+    usages = {u.line: u for u in find_usages(tmp_path, SIZE_REMOVED)}
+    assert usages[4].confidence == HIGH  # dict key, same function, POST /orders
+    assert usages[7].confidence == LOW  # sent with GET /orders, not POST
+    assert "uses GET /orders, not POST" in usages[7].reasons[0]
+    assert usages[12].confidence == LOW  # LABEL = "size": unrelated module-level text
+    assert 10 not in usages  # "size: " is a different string
+
+
+def test_property_built_in_another_function_is_medium(tmp_path):
+    (tmp_path / "client.py").write_text(
+        "import requests\n"
+        "def build(size):\n"
+        '    return {"size": size}\n'
+        "def send(body):\n"
+        '    return requests.post("/orders", json=body)\n'
+    )
+    [usage] = find_usages(tmp_path, SIZE_REMOVED)
+    assert usage.confidence == MEDIUM
+    assert usage.reasons == ("'size' is not in the same function as the call to /orders",)
+
+
+def test_http_method_is_read_from_wrapper_calls(tmp_path):
+    (tmp_path / "client.py").write_text(
+        "def order():\n"
+        '    return _request("POST", "/orders", {"pizza": "x"})\n'
+        "def orders():\n"
+        '    return _request(method="GET", path="/orders")\n'
+    )
+    change = Change("POST", "/orders", NEW_REQUIRED_PROPERTY, "pizza_size")
+    assert confidence_by_line(find_usages(tmp_path, change)) == {2: HIGH, 4: LOW}
+
+
+def test_unknown_http_method_does_not_lower_confidence(tmp_path):
+    (tmp_path / "client.py").write_text(
+        'URL = BASE + "/orders"\ndef order(size):\n    return send(URL, {"size": size})\n'
+    )
+    [usage] = find_usages(tmp_path, SIZE_REMOVED)
+    assert usage.confidence == MEDIUM  # only "different function" counts against it
+    assert len(usage.reasons) == 1
+
+
+def test_paths_with_parameters_only_partly_match(tmp_path):
+    (tmp_path / "client.py").write_text(
+        'import requests\ndef show(order_id):\n    return requests.get(f"/orders/{order_id}")\n'
+    )
+    change = Change("GET", "/orders/{id}", REMOVED_ENDPOINT)
+    [usage] = find_usages(tmp_path, change)
+    assert usage.confidence == MEDIUM
+    assert usage.reasons == ("the path only partly matches /orders/{id}",)
+
+
+def test_scan_can_hide_lower_confidence_lines(tmp_path, capsys):
+    app = tmp_path / "app"
+    app.mkdir()
+    (app / "client.py").write_text(CLIENT)
+    assert main(["scan", str(V1), str(V2), str(app)]) == 1
+    out = capsys.readouterr().out
+    assert "[low]    " in out and "- the nearby call uses GET /orders, not POST" in out
+
+    assert main(["scan", str(V1), str(V2), str(app), "--min-confidence", "high"]) == 1
+    out = capsys.readouterr().out
+    assert "[low]" not in out
+    assert "line(s) with lower confidence were hidden by --min-confidence high." in out
+    assert "Found 1 affected line(s) in 1 file(s): 1 high, 0 medium, 0 low confidence." in out
+
+
+def test_scan_rejects_an_unknown_confidence_level(capsys):
+    with pytest.raises(SystemExit):
+        main(["scan", str(V1), str(V2), str(APP), "--min-confidence", "certain"])

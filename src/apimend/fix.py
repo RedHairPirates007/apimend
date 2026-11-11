@@ -1,8 +1,9 @@
 """Fix code affected by breaking API changes, and keep a fix only when it is verified.
 
 For now apimend fixes one kind of change automatically: a request property that was
-renamed (for example `size` -> `pizza_size`). A fix is applied and checked by
-`apimend.verify`; it is undone automatically unless the evidence supports keeping it.
+renamed (for example `size` -> `pizza_size`). By default only lines found with high
+confidence are changed. A fix is applied and checked by `apimend.verify`; it is undone
+automatically unless the evidence supports keeping it.
 """
 
 from __future__ import annotations
@@ -14,7 +15,15 @@ from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from pathlib import Path
 
-from apimend.scan import NEW_REQUIRED_PROPERTY, REMOVED_PROPERTY, Change, find_usages
+from apimend.scan import (
+    HIGH,
+    NEW_REQUIRED_PROPERTY,
+    REMOVED_PROPERTY,
+    Change,
+    Usage,
+    confidence_rank,
+    find_usages,
+)
 from apimend.verify import TESTS_ONLY, UNVERIFIED, VERIFIED, Report, verify
 
 QUOTES = ("'", '"')
@@ -96,17 +105,36 @@ def _key_literals(tree: ast.AST, name: str, lines: set[int]) -> list[ast.Constan
     return found
 
 
-def plan_fixes(
+def rename_usages(
     changes: Iterable[Change], root: str | Path, exclude: Iterable[str] = ()
-) -> list[Edit]:
-    """Work out which lines to change to fix renamed request properties."""
-    # (file, line) -> list of (start byte, end byte, replacement text)
-    replacements: dict[tuple[Path, int], list[tuple[int, int, str]]] = {}
+) -> list[tuple[Rename, Usage]]:
+    """Every line that uses a renamed property, paired with its rename."""
+    found: list[tuple[Rename, Usage]] = []
     for rename in find_renames(changes):
         removed = Change(rename.method, rename.path, REMOVED_PROPERTY, rename.old)
-        lines_by_file: dict[Path, set[int]] = {}
-        for usage in find_usages(root, removed, exclude):
-            lines_by_file.setdefault(usage.file, set()).add(usage.line)
+        found.extend((rename, usage) for usage in find_usages(root, removed, exclude))
+    return found
+
+
+def plan_fixes(
+    changes: Iterable[Change],
+    root: str | Path,
+    exclude: Iterable[str] = (),
+    min_confidence: str = HIGH,
+) -> list[Edit]:
+    """Work out which lines to change to fix renamed request properties.
+
+    Only lines found with at least `min_confidence` are changed.
+    """
+    # (file, line) -> list of (start byte, end byte, replacement text)
+    replacements: dict[tuple[Path, int], list[tuple[int, int, str]]] = {}
+    by_rename: dict[Rename, dict[Path, set[int]]] = {}
+    for rename, usage in rename_usages(changes, root, exclude):
+        if confidence_rank(usage.confidence) < confidence_rank(min_confidence):
+            continue  # not sure enough: leave the line for a person to review
+        lines_by_file = by_rename.setdefault(rename, {})
+        lines_by_file.setdefault(usage.file, set()).add(usage.line)
+    for rename, lines_by_file in by_rename.items():
         for file, lines in lines_by_file.items():
             tree = ast.parse(file.read_text(encoding="utf-8"))
             source_lines = _read_lines(file)
