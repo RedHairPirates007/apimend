@@ -14,7 +14,7 @@ apimend is in early development. Security fixes are made for the **latest releas
 **Please do not report security problems in public issues.**
 
 Report them privately through GitHub instead:
-[**Report a vulnerability**](https://github.com/sarathpanicker07/apimend/security/advisories/new)
+[**Report a vulnerability**](https://github.com/RedHairPirates007/apimend/security/advisories/new)
 (Security tab → *Report a vulnerability*).
 
 Please include:
