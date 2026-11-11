@@ -1,6 +1,7 @@
 import json
 import shlex
 import shutil
+import socket
 import sys
 import threading
 import urllib.error
@@ -42,6 +43,13 @@ class FakeUpstream(BaseHTTPRequestHandler):
         self.send_header("Content-Length", str(len(reply)))
         self.end_headers()
         self.wfile.write(reply)
+
+    def do_GET(self):
+        # A header "folded" over two lines: once parsed, its value contains a line break.
+        self.send_response(200)
+        self.send_header("X-Folded", "first\r\n second")
+        self.send_header("Content-Length", "0")
+        self.end_headers()
 
 
 @pytest.fixture
@@ -151,3 +159,20 @@ def test_passing_tests_that_send_invalid_requests_are_caught(lab, tmp_path, caps
     assert "POST /orders -> 422: does NOT match the new spec" in out
     assert "NOT VERIFIED: some requests did not match the new spec" in out
     assert (lab / "app" / "pizza_client.py").read_bytes() == before
+
+
+def test_proxy_never_passes_line_breaks_in_headers(proxy):
+    """A line break in a header value could inject extra headers (HTTP response splitting)."""
+    port = proxy._server.server_address[1]
+    with socket.create_connection(("127.0.0.1", port), timeout=5) as conn:
+        conn.sendall(b"GET /folded HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n")
+        raw = b""
+        while chunk := conn.recv(4096):
+            raw += chunk
+    head = raw.split(b"\r\n\r\n", 1)[0].decode()
+    lines = head.split("\r\n")
+    assert lines[0] == "HTTP/1.1 200 OK"
+    assert "X-Folded: first second" in lines
+    assert not any(line[:1] in (" ", "\t") for line in lines)  # nothing continues a header
+    names = [line.split(":", 1)[0].lower() for line in lines[1:]]
+    assert len(names) == len(set(names))  # no header is sent twice

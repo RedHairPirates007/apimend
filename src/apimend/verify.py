@@ -43,6 +43,9 @@ HOP_BY_HOP = {
     "upgrade",
 }
 
+# The proxy's own response already includes these, so the mock's copies are dropped.
+OWN_HEADERS = {"date", "server"}
+
 VERIFIED = "verified"
 TESTS_ONLY = "tests-only"
 UNVERIFIED = "unverified"
@@ -104,6 +107,11 @@ class Report:
         return VERIFIED
 
 
+def header_text(text: str) -> str:
+    """Remove line breaks, so a header can never be split into extra headers."""
+    return text.replace("\r", "").replace("\n", "")
+
+
 def port_in_use(port: int) -> bool:
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
         sock.settimeout(0.5)
@@ -155,8 +163,8 @@ class RecordingProxy:
                 proxy._record(RecordedRequest(self.command, self.path, status))
                 self.send_response(status)
                 for key, value in reply_headers:
-                    if key.lower() not in HOP_BY_HOP:
-                        self.send_header(key, value)
+                    if key.lower() not in HOP_BY_HOP | OWN_HEADERS:
+                        self.send_header(header_text(key), header_text(value))
                 self.send_header("Content-Length", str(len(data)))
                 self.end_headers()
                 if self.command != "HEAD":
