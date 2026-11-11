@@ -44,7 +44,7 @@ apimend aims to close that gap.
 |---|:-:|---|
 | Compare two OpenAPI specs | ✅ Available | Specs you provide (YAML or JSON) |
 | Detect breaking changes | ✅ Available | Via [oasdiff](https://github.com/oasdiff/oasdiff) |
-| Find affected code | ✅ Available | **Python only**; request bodies and removed endpoints; paths written as plain strings |
+| Find affected code | ✅ Available | **Python only**; request bodies and removed endpoints; paths written as plain strings; every line rated high / medium / low confidence |
 | Detect renamed properties | 🟡 Limited | One removed + one new required property on the same endpoint |
 | Fix code automatically | 🟡 Limited | Renamed request properties only |
 | Verify fixes | ✅ Available | Records every request your tests send to a **mock generated from the new spec** and checks it matches — not the live API |
@@ -145,20 +145,42 @@ Scanning lab/pizza-api/app for code affected by 2 breaking change(s)...
 
 POST /orders: request property 'size' was removed
   hint: looks like it was renamed to 'pizza_size'
-  lab/pizza-api/app/pizza_client.py:34: return _request("POST", "/orders", {"pizza": pizza, "size": size})
+  [high]   lab/pizza-api/app/pizza_client.py:34: return _request("POST", "/orders", {"pizza": pizza, "size": size})
 
 POST /orders: request property 'pizza_size' is now required
   hint: looks like the new name for 'size'
-  lab/pizza-api/app/pizza_client.py:34: return _request("POST", "/orders", {"pizza": pizza, "size": size})
+  [high]   lab/pizza-api/app/pizza_client.py:34: return _request("POST", "/orders", {"pizza": pizza, "size": size})
 
-Found 1 affected line(s) in 1 file(s).
+Found 1 affected line(s) in 1 file(s): 1 high, 0 medium, 0 low confidence.
 ```
 
 - The folder defaults to the current directory. Skip files with `--exclude "tests/*"`
   (repeatable).
+- Every line gets a **confidence level**, with the reasons whenever it is not high (see
+  below). Show only the lines you trust with `--min-confidence medium` or `high`.
 - Code is read with Python's `ast` module, so comments are ignored, and only files that
   reference the endpoint are checked.
 - Exit codes: `0` not affected, `1` affected code found, `2` could not run.
+
+**Confidence levels.** apimend checks each affected line for three signs that it really
+talks to the changed endpoint:
+
+| Check | Example that passes |
+|---|---|
+| The property is used in the **same function** as the call to the endpoint | `requests.post("/orders", json={"size": size})` |
+| The property is used as a **dictionary key** (not just mentioned in some text) | `{"size": size}` or `body["size"]` |
+| The **path matches exactly** (paths with `{parameters}` can only partly match) | `"/orders"` for `/orders` |
+
+| Level | Meaning |
+|---|---|
+| `high` | Every check passed |
+| `medium` | One check failed — probably affected, worth a look |
+| `low` | Two or more checks failed, or the code calls a **different HTTP method** (for example `GET /orders` when `POST /orders` changed) |
+
+For lines that call the endpoint (a removed endpoint, or a property that became required),
+only the path and HTTP method checks apply. apimend reads the HTTP method from calls such as
+`requests.post(...)` or `request("POST", ...)`; when it cannot tell, the confidence is not
+lowered.
 
 > [!IMPORTANT]
 > Current limits: scans **Python** files only, checks **request bodies and removed endpoints**
@@ -173,7 +195,7 @@ spec.
 
 ```console
 $ apimend fix lab/pizza-api/v1.yaml lab/pizza-api/v2.yaml lab/pizza-api/app --test "python -m pytest lab/pizza-api/app -q"
-Proposed fix (1 line(s)):
+Proposed fix (1 line(s), high confidence or above):
 
 --- a/lab/pizza-api/app/pizza_client.py
 +++ b/lab/pizza-api/app/pizza_client.py
@@ -207,10 +229,13 @@ Review the change with 'git diff' before committing it.
 | `--port <number>` | Port for the mock server (default `4010`). The URL is also passed to your tests as `APIMEND_MOCK_URL`. |
 | `--no-mock` | Run the tests without starting a mock server (requests are then not checked). |
 | `--allow-unverified` | Keep the fix even if your tests never called the mock API. |
+| `--min-confidence <level>` | Only change lines found with at least this confidence (default `high`). Lines below it are listed for you to review. |
 | `--exclude "<pattern>"` | Skip matching files, as in `scan`. |
 
 **Safety first:**
 
+- By default only lines found with **high confidence** are changed. Anything less certain is
+  listed with the reason, for you to review (or to include with `--min-confidence medium`).
 - Only the exact characters that need changing are edited — quote style, comments, spacing,
   line endings and non-English text are preserved.
 - If the tests fail, a setup problem occurs (busy port, Prism missing), or you press
@@ -346,7 +371,7 @@ apimend/
 
 - [x] Verification reports that show what was actually checked (requests that reached the
       mock, whether they matched the spec) and never over-claim
-- [ ] Confidence scores for affected code (high / medium / low)
+- [x] Confidence scores for affected code (high / medium / low)
 - [ ] Language-adapter architecture, so new languages plug into the same core
 - [ ] Real-world benchmark on public API specs and repositories, with published results
 
