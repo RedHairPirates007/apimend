@@ -6,11 +6,11 @@
 
 **Catch breaking OpenAPI changes in your code — and fix them safely.**
 
-[![CI](https://github.com/sarathpanicker07/apimend/actions/workflows/ci.yml/badge.svg)](https://github.com/sarathpanicker07/apimend/actions/workflows/ci.yml)
-[![Release](https://img.shields.io/github/v/release/sarathpanicker07/apimend)](https://github.com/sarathpanicker07/apimend/releases)
+[![CI](https://github.com/RedHairPirates007/apimend/actions/workflows/ci.yml/badge.svg)](https://github.com/RedHairPirates007/apimend/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/RedHairPirates007/apimend)](https://github.com/RedHairPirates007/apimend/releases)
 [![License: Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 [![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue.svg)](pyproject.toml)
-[![Open in GitHub Codespaces](https://img.shields.io/badge/Open%20in-Codespaces-0F766E?logo=github)](https://codespaces.new/sarathpanicker07/apimend)
+[![Open in GitHub Codespaces](https://img.shields.io/badge/Open%20in-Codespaces-0F766E?logo=github)](https://codespaces.new/RedHairPirates007/apimend)
 
 [Quick start](#quick-start) •
 [Usage](#usage) •
@@ -62,7 +62,7 @@ apimend aims to close that gap.
 
 ### Option 1: GitHub Codespaces (recommended)
 
-Click **[Open in Codespaces](https://codespaces.new/sarathpanicker07/apimend)**. The dev
+Click **[Open in Codespaces](https://codespaces.new/RedHairPirates007/apimend)**. The dev
 container installs Python, Node.js, [Prism](https://github.com/stoplightio/prism),
 [oasdiff](https://github.com/oasdiff/oasdiff) and apimend for you. Then run:
 
@@ -81,7 +81,7 @@ apimend fix  lab/pizza-api/v1.yaml lab/pizza-api/v2.yaml lab/pizza-api/app   # p
 Requirements: Python 3.10+, Node.js, and [oasdiff](https://github.com/oasdiff/oasdiff#installation).
 
 ```bash
-git clone https://github.com/sarathpanicker07/apimend.git
+git clone https://github.com/RedHairPirates007/apimend.git
 cd apimend
 python -m venv .venv && source .venv/bin/activate   # Windows: .venv\Scripts\activate
 pip install -e ".[dev]"
@@ -396,7 +396,7 @@ apimend/
 
 Ideas, bug reports and pull requests are welcome!
 
-1. Open an [issue](https://github.com/sarathpanicker07/apimend/issues) to discuss larger changes first.
+1. Open an [issue](https://github.com/RedHairPirates007/apimend/issues) to discuss larger changes first.
 2. Fork the repo and open it in Codespaces — everything is set up for you.
 3. Make sure `pytest` and `ruff check .` pass before opening a pull request.
 

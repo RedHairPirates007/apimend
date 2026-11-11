@@ -71,6 +71,6 @@ of the new API.
 - Dev container for one-click setup in GitHub Codespaces.
 - Continuous integration running lint, formatting checks and the full test suite.
 
-[Unreleased]: https://github.com/sarathpanicker07/apimend/compare/v0.1.1...HEAD
-[0.1.1]: https://github.com/sarathpanicker07/apimend/compare/v0.1.0...v0.1.1
-[0.1.0]: https://github.com/sarathpanicker07/apimend/releases/tag/v0.1.0
+[Unreleased]: https://github.com/RedHairPirates007/apimend/compare/v0.1.1...HEAD
+[0.1.1]: https://github.com/RedHairPirates007/apimend/compare/v0.1.0...v0.1.1
+[0.1.0]: https://github.com/RedHairPirates007/apimend/releases/tag/v0.1.0
