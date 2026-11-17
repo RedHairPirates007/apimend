@@ -44,7 +44,7 @@ apimend aims to close that gap.
 |---|:-:|---|
 | Compare two OpenAPI specs | ✅ Available | Specs you provide (YAML or JSON) |
 | Detect breaking changes | ✅ Available | Via [oasdiff](https://github.com/oasdiff/oasdiff) |
-| Find affected code | ✅ Available | **Python only**; request bodies and removed endpoints; paths written as plain strings; every line rated high / medium / low confidence |
+| Find affected code | ✅ Available | **Python only**; request bodies and removed endpoints; each request and its body checked on its own; every line rated high / medium / low confidence |
 | Detect renamed properties | 🟡 Limited | One removed + one new required property on the same endpoint |
 | Fix code automatically | 🟡 Limited | Renamed request properties only |
 | Verify fixes | ✅ Available | Records every request your tests send to a **mock generated from the new spec** and checks it matches — not the live API |
@@ -162,29 +162,40 @@ Found 1 affected line(s) in 1 file(s): 1 high, 0 medium, 0 low confidence.
   reference the endpoint are checked.
 - Exit codes: `0` not affected, `1` affected code found, `2` could not run.
 
-**Confidence levels.** apimend checks each affected line for three signs that it really
-talks to the changed endpoint:
+**How apimend finds affected code.** It looks at every **request** in your Python files, such
+as `requests.post("/orders", json=body)` or your own `_request("POST", "/orders", body)`, and
+works out the HTTP method, the path and the **body that request sends**. Each request is
+checked on its own, so a property sent by one request never makes another look correct,
+and a dictionary that is not part of the request (a log message, analytics, a database
+row) is never reported as affected.
 
-| Check | Example that passes |
+apimend traces a request body through:
+
+| Pattern | Example |
 |---|---|
-| The property is used in the **same function** as the call to the endpoint | `requests.post("/orders", json={"size": size})` |
-| The property is used as a **dictionary key** (not just mentioned in some text) | `{"size": size}` or `body["size"]` |
-| The **path matches exactly** (paths with `{parameters}` can only partly match) | `"/orders"` for `/orders` |
+| A dictionary passed directly | `requests.post("/orders", json={"size": size})` |
+| A variable assigned once | `body = {"size": size}` … `post("/orders", json=body)` |
+| Keys added to that variable | `body["size"] = size` |
+| A function in the same file that returns a dictionary | `post("/orders", json=make_body(size))` |
+| JSON encoding | `Request(url, data=json.dumps(body).encode())` |
+
+It understands `requests`, `httpx`, `aiohttp`, `urllib` and your own wrapper functions,
+including URLs built with f-strings, `+` or a constant.
 
 | Level | Meaning |
 |---|---|
-| `high` | Every check passed |
-| `medium` | One check failed — probably affected, worth a look |
-| `low` | Two or more checks failed, or the code calls a **different HTTP method** (for example `GET /orders` when `POST /orders` changed) |
+| `high` | **Proven:** part of what a request to the changed endpoint sends, with the same HTTP method and the exact path |
+| `medium` | **Probable:** it belongs to a request to the endpoint, but the HTTP method could not be determined, or the path only partly matches (paths with `{parameters}`) |
+| `low` | **Uncertain:** apimend could not connect it to the request, for example because the body comes from a function parameter or is changed with `update()` |
 
-For lines that call the endpoint (a removed endpoint, or a property that became required),
-only the path and HTTP method checks apply. apimend reads the HTTP method from calls such as
-`requests.post(...)` or `request("POST", ...)`; when it cannot tell, the confidence is not
-lowered.
+Requests that use a **different HTTP method** (for example `GET /orders` when `POST /orders`
+changed) are a different operation and are not reported. When something cannot be checked,
+apimend says so with the reason, instead of silently skipping it.
 
 > [!IMPORTANT]
-> Current limits: scans **Python** files only, checks **request bodies and removed endpoints**
-> (not responses yet), and finds endpoints written as plain strings in the code.
+> Current limits: scans **Python** files only, and checks **request bodies and removed
+> endpoints** (not query parameters, headers or responses yet). Bodies built in another file,
+> or passed in as a function parameter, cannot be traced yet and are reported as `low`.
 
 ### `apimend fix <old-spec> <new-spec> [folder] --test "<command>"`
 
@@ -349,6 +360,7 @@ apimend/
 ├── lab/pizza-api/        Test bed: fake API versions and a customer app
 ├── src/apimend/          The apimend package
 │   ├── __init__.py
+│   ├── callsites.py      Finds each request in Python code and the body it sends
 │   ├── cli.py            Command-line interface (doctor, diff, scan, fix)
 │   ├── fix.py            Plans and applies fixes, undoing them unless verified
 │   ├── scan.py           Finds code affected by breaking changes
@@ -367,28 +379,42 @@ apimend/
 - [x] Find affected Python code (`apimend scan`) and fix renamed request properties (`apimend fix`)
 - [x] Test suite, dev container, CI and honest documentation of scope
 
-**v0.2 — Trustworthy foundations**
+**v0.2 — Trust and correctness** (in progress)
 
 - [x] Verification reports that show what was actually checked (requests that reached the
       mock, whether they matched the spec) and never over-claim
 - [x] Confidence scores for affected code (high / medium / low)
+- [x] Security hardening: security policy, Dependabot, CodeQL, pinned and verified tools
+- [x] Request-level analysis: each request and its body checked on its own (fixes unrelated
+      dictionaries being reported, and missing properties being hidden)
+- [ ] Repair safety (proven / probable / uncertain) and stricter rename detection (types,
+      enums, formats)
+- [ ] Honest verification verdicts, including partial verification and untested endpoints
+- [ ] A first benchmark measuring precision, recall and wrong automatic repairs
+
+**v0.3 — Better code intelligence**
+
+- [ ] Data flow across functions and files, and a documented HTTP-client compatibility matrix
+- [ ] Reporting of dynamic URLs that cannot be resolved
 - [ ] Language-adapter architecture, so new languages plug into the same core
-- [ ] Real-world benchmark on public API specs and repositories, with published results
 
-**v0.3 — Reach**
+**v0.4 — Professional OpenAPI support**
 
-- [ ] JavaScript / TypeScript support
+- [ ] Query, path and header parameters; form data; nested schemas; external references
 - [ ] Response-change detection
-- [ ] Smarter rename detection (types, enums, several renames at once)
 
-**v0.4 — Automation ("Dependabot for APIs")**
+**v0.5 — Production readiness**
 
-- [ ] GitHub Action: comments on pull requests and opens verified fix pull requests
-- [ ] Provider monitoring: detect new API versions automatically
+- [ ] Real-world benchmark with published results, structured JSON output, crash-safe repairs
+
+**v0.6 — GitHub and CI integration**
+
+- [ ] GitHub Action that comments on pull requests and opens verified fix pull requests
 
 **Later**
 
-- [ ] Go, Java and C# support
+- [ ] JavaScript / TypeScript, then Go, Java and C#
+- [ ] Provider monitoring: detect new API versions automatically
 - [ ] Optional verification against a provider's sandbox environment
 - [ ] More automatic fixes (including AI-assisted), kept behind the same verification gate
 

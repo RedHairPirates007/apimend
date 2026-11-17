@@ -141,7 +141,11 @@ def test_end_to_end_fix_is_verified_against_a_mock_of_the_new_api(lab, monkeypat
 
 # --- confidence --------------------------------------------------------------
 
-SPLIT_CLIENT = (
+# The HTTP method of send() is unknown, so "size" is only probable (medium).
+PROBABLE_CLIENT = 'def order(size):\n    return send("/orders", {"size": size})\n'
+
+# The body comes in as a parameter, so build()'s dictionary is uncertain (low).
+UNCERTAIN_CLIENT = (
     "import requests\n"
     "def build(size):\n"
     '    return {"size": size}\n'
@@ -151,25 +155,36 @@ SPLIT_CLIENT = (
 
 
 def test_lines_below_the_minimum_confidence_are_not_changed(tmp_path):
-    (tmp_path / "client.py").write_text(SPLIT_CLIENT)  # "size" is found with medium confidence
+    (tmp_path / "client.py").write_text(PROBABLE_CLIENT)
     assert plan_fixes(RENAME_CHANGES, tmp_path) == []
     [edit] = plan_fixes(RENAME_CHANGES, tmp_path, min_confidence="medium")
-    assert edit.after.strip() == 'return {"pizza_size": size}'
+    assert edit.after.strip() == 'return send("/orders", {"pizza_size": size})'
+
+
+def test_unrelated_dictionaries_are_never_changed(tmp_path):
+    source = (
+        "def create_order(size):\n"
+        '    post("/orders", {"pizza": "margherita", "size": size})\n'
+        '    log({"size": size})\n'
+    )
+    (tmp_path / "client.py").write_text(source)
+    [edit] = plan_fixes(RENAME_CHANGES, tmp_path, min_confidence="low")
+    assert edit.line == 2  # the request body only, not the log call
 
 
 def test_fix_lists_lines_it_is_not_sure_enough_to_change(lab, capsys):
-    (lab / "app" / "helpers.py").write_text(SPLIT_CLIENT)
+    (lab / "app" / "helpers.py").write_text(PROBABLE_CLIENT)
     assert main(fix_args(lab)) == 1  # preview only
     out = capsys.readouterr().out
     assert "Proposed fix (1 line(s), high confidence or above):" in out
     assert "Not changed, because the confidence is below high" in out
-    assert "helpers.py:3:" in out
+    assert "helpers.py:2:" in out
     assert "If the medium ones look right, re-run with --min-confidence medium." in out
-    assert 'return {"size": size}' in (lab / "app" / "helpers.py").read_text()
+    assert '{"size": size}' in (lab / "app" / "helpers.py").read_text()
 
 
 def test_fix_explains_when_nothing_is_confident_enough(tmp_path, capsys):
-    (tmp_path / "client.py").write_text(SPLIT_CLIENT)
+    (tmp_path / "client.py").write_text(PROBABLE_CLIENT)
     args = ["fix", str(LAB / "v1.yaml"), str(LAB / "v2.yaml"), str(tmp_path)]
     assert main(args) == 1
     out = capsys.readouterr().out
@@ -178,9 +193,7 @@ def test_fix_explains_when_nothing_is_confident_enough(tmp_path, capsys):
 
 
 def test_fix_never_suggests_changing_low_confidence_lines(tmp_path, capsys):
-    (tmp_path / "client.py").write_text(
-        'import requests\ndef orders():\n    return requests.get("/orders", params={"size": 1})\n'
-    )
+    (tmp_path / "client.py").write_text(UNCERTAIN_CLIENT)
     args = ["fix", str(LAB / "v1.yaml"), str(LAB / "v2.yaml"), str(tmp_path)]
     assert main(args) == 1
     out = capsys.readouterr().out
