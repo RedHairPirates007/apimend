@@ -13,12 +13,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   every request your tests sent to the mock (and whether it matched the new spec), a re-scan
   for remaining affected code, and what was not checked (the live API).
 - `--allow-unverified` keeps a fix even when the tests never called the mock API.
-- Every affected line found by `scan` and `fix` has a confidence level (high, medium or
-  low) with the reasons when it is not high: whether the property is used in the same
-  function as the call, whether it is used as a dictionary key, whether the path matches
-  exactly, and whether the call uses the right HTTP method.
+- Every affected line found by `scan` and `fix` has a confidence level: high (proven),
+  medium (probable) or low (uncertain), with the reasons when it is not high.
+- Request-level analysis (`apimend.callsites`): apimend finds each request in the code, its
+  HTTP method, its path and the body it sends, following variables, keys added later,
+  helper functions in the same file and `json.dumps(...)`. Works with `requests`, `httpx`,
+  `aiohttp`, `urllib` and your own wrapper functions.
 - `--min-confidence` on `scan` hides less certain lines; on `fix` it sets which lines may be
   changed.
+
+### Fixed
+
+- A dictionary in the same function as a request (for example a log message) was reported,
+  and could be changed by `fix`, even though it was not part of the request.
+- A newly required property was considered present when any other request in the file sent
+  it, so a request missing it could go unreported.
 
 ### Changed
 
@@ -26,6 +35,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   API give `UNVERIFIED`, and requests that do not match the new spec give `NOT VERIFIED`; in
   both cases the fix is undone.
 - With `--no-mock`, a passing run is reported as `TESTS PASSED` instead of `VERIFIED`.
+- Requests with a different HTTP method from the changed operation are no longer reported,
+  and a path that no request uses is reported as `low` instead of being ignored.
 - `fix` only changes lines found with high confidence by default, and lists the others for
   review instead of editing them.
 
