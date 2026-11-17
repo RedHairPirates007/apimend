@@ -1,0 +1,208 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="960" height="370" viewBox="0 0 960 370" role="img" aria-labelledby="title desc">
+  <title id="title">The apimend pipeline</title>
+  <desc id="desc">An animated pipeline of five stations that an API change flows through. 1, compare specs: the old and new OpenAPI specs are compared to find breaking changes. 2, find requests: every request in your code is found, with the body it sends; logs and other dictionaries are ignored. 3, fix proven lines: only lines that are proven to be affected are changed, for example size becomes pizza_size. 4, verify: your tests run against a mock of the new API and every request is checked. 5, keep or undo: the fix is kept only if it is verified, otherwise it is undone.</desc>
+  <defs>
+    <linearGradient id="sky" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#0a0f1e"/>
+      <stop offset="1" stop-color="#0c1d24"/>
+    </linearGradient>
+    <radialGradient id="halo" cx="0.5" cy="0.45" r="0.6">
+      <stop offset="0" stop-color="#2dd4bf" stop-opacity="0.10"/>
+      <stop offset="1" stop-color="#2dd4bf" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="beam" x1="0" y1="1" x2="0" y2="0">
+      <stop offset="0" stop-color="#2dd4bf" stop-opacity="0.55"/>
+      <stop offset="1" stop-color="#2dd4bf" stop-opacity="0"/>
+    </linearGradient>
+    <linearGradient id="tube" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#334155"/>
+      <stop offset="0.5" stop-color="#1e293b"/>
+      <stop offset="1" stop-color="#0f172a"/>
+    </linearGradient>
+    <pattern id="grid" width="32" height="18.5" patternUnits="userSpaceOnUse">
+      <path d="M0 9.25 L16 0 L32 9.25 L16 18.5 Z" fill="none" stroke="#1c2b3d" stroke-width="0.6"/>
+    </pattern>
+    <filter id="glow" x="-50%" y="-50%" width="200%" height="200%">
+      <feGaussianBlur stdDeviation="3.5" result="blur"/>
+      <feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+    <filter id="soft" x="-30%" y="-100%" width="160%" height="300%">
+      <feGaussianBlur stdDeviation="5"/>
+    </filter>
+    <!-- the sides of one 3D station, drawn around 0,0 (each top face is drawn separately) -->
+    <g id="block">
+      <polygon class="left" points="-50,0 0,26 0,60 -50,34"/>
+      <polygon class="right" points="0,26 50,0 50,34 0,60"/>
+      <line class="edge" x1="0" y1="26" x2="0" y2="60"/>
+    </g>
+  </defs>
+  <style>
+    svg { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif; }
+    .code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+    .heading { fill: #f1f5f9; font-size: 17px; font-weight: 700; letter-spacing: 0.2px; }
+    .sub { fill: #94a3b8; font-size: 12px; }
+    .chip { fill: #0f2a2c; stroke: #1f5f5a; }
+    .chip-text { fill: #5eead4; font-size: 11px; }
+    .left { fill: #172036; } .right { fill: #0e1628; }
+    .edge { fill: none; stroke: #2b3b55; stroke-width: 1; }
+    .top { fill: #1e2a42; stroke: #2b3b55; stroke-width: 1; animation: top 12s ease-in-out infinite; }
+    .tube { stroke: url(#tube); stroke-width: 16; stroke-linecap: round; }
+    .tube-rim { stroke: #2b3b55; stroke-width: 18; stroke-linecap: round; }
+    .flow { stroke: #2dd4bf; stroke-width: 2.5; stroke-linecap: round; stroke-dasharray: 2 14;
+            opacity: 0.8; animation: flow 1.2s linear infinite; }
+    .packet { animation: travel 12s ease-in-out infinite; }
+    .beam { opacity: 0; animation: beam 12s ease-in-out infinite; }
+    .icon { animation: bob 3s ease-in-out infinite; }
+    .badge { fill: #0b1324; stroke: #2b3b55; stroke-width: 1.5; animation: badge 12s ease-in-out infinite; }
+    .glyph { fill: none; stroke: #94a3b8; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round;
+             animation: glyph 12s ease-in-out infinite; }
+    .num { fill: #2dd4bf; font-size: 10.5px; font-weight: 700; letter-spacing: 1px; text-anchor: middle; }
+    .title { fill: #f1f5f9; font-size: 14px; font-weight: 600; text-anchor: middle; }
+    .text { fill: #94a3b8; font-size: 11.5px; text-anchor: middle; }
+    .red { fill: #fb7185; } .green { fill: #4ade80; } .amber { fill: #fbbf24; }
+    .pill-ok { fill: #0d2a1a; stroke: #22c55e; } .pill-undo { fill: #2a1f0a; stroke: #f59e0b; }
+    .label { opacity: 0.55; animation: label 12s ease-in-out infinite; }
+
+    /* each station lights up 2 seconds after the one before it; the last one stays lit longer */
+    .d2 { animation-delay: 2s; } .d3 { animation-delay: 4s; } .d4 { animation-delay: 6s; } .d5 { animation-delay: 8s; }
+    .top.d5 { animation-name: top-last; } .beam.d5 { animation-name: beam-last; }
+    .badge.d5 { animation-name: badge-last; } .glyph.d5 { animation-name: glyph-last; }
+    .label.d5 { animation-name: label-last; }
+    .i2 { animation-delay: -0.6s; } .i3 { animation-delay: -1.2s; } .i4 { animation-delay: -1.8s; } .i5 { animation-delay: -2.4s; }
+
+    @keyframes flow { to { stroke-dashoffset: -16; } }
+    @keyframes bob { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-4px); } }
+    @keyframes travel {
+      0% { transform: translateX(0); opacity: 0; }
+      4% { opacity: 1; }
+      11.7% { transform: translateX(0); }
+      16.7%, 28.3% { transform: translateX(184px); }
+      33.3%, 45% { transform: translateX(368px); }
+      50%, 61.7% { transform: translateX(552px); }
+      66.7%, 90% { transform: translateX(736px); opacity: 1; }
+      95%, 100% { transform: translateX(736px); opacity: 0; }
+    }
+    @keyframes top { 0%, 16% { fill: #115e59; } 21%, 100% { fill: #1e2a42; } }
+    @keyframes top-last { 0%, 30% { fill: #115e59; } 35%, 100% { fill: #1e2a42; } }
+    @keyframes beam { 0% { opacity: 0; } 3%, 14% { opacity: 1; } 20%, 100% { opacity: 0; } }
+    @keyframes beam-last { 0% { opacity: 0; } 3%, 28% { opacity: 1; } 34%, 100% { opacity: 0; } }
+    @keyframes badge { 0%, 16% { stroke: #2dd4bf; } 21%, 100% { stroke: #2b3b55; } }
+    @keyframes badge-last { 0%, 30% { stroke: #2dd4bf; } 35%, 100% { stroke: #2b3b55; } }
+    @keyframes glyph { 0%, 16% { stroke: #5eead4; } 21%, 100% { stroke: #94a3b8; } }
+    @keyframes glyph-last { 0%, 30% { stroke: #5eead4; } 35%, 100% { stroke: #94a3b8; } }
+    @keyframes label { 0%, 16% { opacity: 1; } 21%, 100% { opacity: 0.55; } }
+    @keyframes label-last { 0%, 30% { opacity: 1; } 35%, 100% { opacity: 0.55; } }
+
+    @media (prefers-reduced-motion: reduce) {
+      .flow, .packet, .beam, .icon, .badge, .glyph, .top, .label { animation: none; }
+      .label { opacity: 1; } .packet { opacity: 0; }
+    }
+  </style>
+
+  <!-- backdrop -->
+  <rect width="960" height="370" rx="16" fill="url(#sky)"/>
+  <rect x="0" y="64" width="960" height="190" fill="url(#grid)" opacity="0.7"/>
+  <rect width="960" height="370" rx="16" fill="url(#halo)"/>
+  <rect x="0.5" y="0.5" width="959" height="369" rx="16" fill="none" stroke="#1f2d40"/>
+
+  <text class="heading" x="28" y="38">The apimend pipeline</text>
+  <text class="sub" x="28" y="57">from an API change to a verified fix</text>
+  <rect class="chip" x="682" y="24" width="252" height="26" rx="13"/>
+  <text class="chip-text code" x="808" y="41" text-anchor="middle">POST /orders · size → pizza_size</text>
+
+  <!-- light beams above the active station -->
+  <rect class="beam" x="82" y="78" width="60" height="96" rx="30" fill="url(#beam)"/>
+  <rect class="beam d2" x="266" y="78" width="60" height="96" rx="30" fill="url(#beam)"/>
+  <rect class="beam d3" x="450" y="78" width="60" height="96" rx="30" fill="url(#beam)"/>
+  <rect class="beam d4" x="634" y="78" width="60" height="96" rx="30" fill="url(#beam)"/>
+  <rect class="beam d5" x="818" y="78" width="60" height="96" rx="30" fill="url(#beam)"/>
+
+  <!-- the pipe, with data flowing through it -->
+  <line class="tube-rim" x1="112" y1="190" x2="848" y2="190"/>
+  <line class="tube" x1="112" y1="190" x2="848" y2="190"/>
+  <line class="flow" x1="112" y1="190" x2="848" y2="190"/>
+
+  <!-- the change being processed: a small glowing cube that disappears into each station -->
+  <g class="packet" filter="url(#glow)">
+    <g transform="translate(112 184)">
+      <polygon points="-9,0 0,5 0,15 -9,10" fill="#14b8a6"/>
+      <polygon points="0,5 9,0 9,10 0,15" fill="#0f766e"/>
+      <polygon points="0,-5 9,0 0,5 -9,0" fill="#5eead4"/>
+    </g>
+  </g>
+
+  <!-- floor shadows -->
+  <g filter="url(#soft)" fill="#000000" opacity="0.45">
+    <ellipse cx="112" cy="238" rx="56" ry="9"/><ellipse cx="296" cy="238" rx="56" ry="9"/>
+    <ellipse cx="480" cy="238" rx="56" ry="9"/><ellipse cx="664" cy="238" rx="56" ry="9"/>
+    <ellipse cx="848" cy="238" rx="56" ry="9"/>
+  </g>
+
+  <!-- the five stations -->
+  <g transform="translate(112 174)"><use href="#block"/></g>
+  <g transform="translate(296 174)"><use href="#block"/></g>
+  <g transform="translate(480 174)"><use href="#block"/></g>
+  <g transform="translate(664 174)"><use href="#block"/></g>
+  <g transform="translate(848 174)"><use href="#block"/></g>
+  <polygon class="top" points="112,148 162,174 112,200 62,174"/>
+  <polygon class="top d2" points="296,148 346,174 296,200 246,174"/>
+  <polygon class="top d3" points="480,148 530,174 480,200 430,174"/>
+  <polygon class="top d4" points="664,148 714,174 664,200 614,174"/>
+  <polygon class="top d5" points="848,148 898,174 848,200 798,174"/>
+
+  <!-- floating icons -->
+  <g class="icon">
+    <circle class="badge" cx="112" cy="112" r="21"/>
+    <g class="glyph"><rect x="100" y="101" width="15" height="19" rx="2"/><rect x="109" y="105" width="15" height="19" rx="2"/></g>
+  </g>
+  <g class="icon i2">
+    <circle class="badge d2" cx="296" cy="112" r="21"/>
+    <g class="glyph d2"><circle cx="293" cy="109" r="7"/><line x1="298" y1="114" x2="305" y2="121"/></g>
+  </g>
+  <g class="icon i3">
+    <circle class="badge d3" cx="480" cy="112" r="21"/>
+    <g class="glyph d3"><line x1="470" y1="105" x2="481" y2="105"/><line x1="470" y1="119" x2="490" y2="119"/><line x1="480" y1="113" x2="480" y2="125"/><line x1="484" y1="105" x2="490" y2="105"/></g>
+  </g>
+  <g class="icon i4">
+    <circle class="badge d4" cx="664" cy="112" r="21"/>
+    <g class="glyph d4"><path d="M664 99 L675 103 L675 112 C675 119 670 124 664 126 C658 124 653 119 653 112 L653 103 Z"/><polyline points="659,112 663,116 670,108"/></g>
+  </g>
+  <g class="icon i5">
+    <circle class="badge d5" cx="848" cy="112" r="21"/>
+    <g class="glyph d5"><polyline points="838,113 845,120 858,105"/></g>
+  </g>
+
+  <!-- labels -->
+  <g class="label">
+    <text class="num" x="112" y="262">STEP 01</text>
+    <text class="title" x="112" y="282">Compare specs</text>
+    <text class="text" x="112" y="301">old vs new OpenAPI</text>
+    <text class="text" x="112" y="317">→ breaking changes</text>
+  </g>
+  <g class="label d2">
+    <text class="num" x="296" y="262">STEP 02</text>
+    <text class="title" x="296" y="282">Find requests</text>
+    <text class="text" x="296" y="301">each request + its body</text>
+    <text class="text" x="296" y="317">logs &amp; other dicts ignored</text>
+  </g>
+  <g class="label d3">
+    <text class="num" x="480" y="262">STEP 03</text>
+    <text class="title" x="480" y="282">Fix proven lines</text>
+    <text class="text code" x="480" y="301"><tspan class="red">"size"</tspan> → <tspan class="green">"pizza_size"</tspan></text>
+    <text class="text" x="480" y="317">uncertain lines left alone</text>
+  </g>
+  <g class="label d4">
+    <text class="num" x="664" y="262">STEP 04</text>
+    <text class="title" x="664" y="282">Verify</text>
+    <text class="text" x="664" y="301">your tests + a v2 mock</text>
+    <text class="text" x="664" y="317">every request checked</text>
+  </g>
+  <g class="label d5">
+    <text class="num" x="848" y="262">STEP 05</text>
+    <text class="title" x="848" y="282">Keep or undo</text>
+    <rect class="pill-ok" x="778" y="292" width="140" height="20" rx="10"/>
+    <text class="text green" x="848" y="306">✓ verified → kept</text>
+    <rect class="pill-undo" x="778" y="318" width="140" height="20" rx="10"/>
+    <text class="text amber" x="848" y="332">↺ otherwise → undone</text>
+  </g>
+</svg>
