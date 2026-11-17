@@ -18,6 +18,10 @@
 [Roadmap](#roadmap) •
 [Contributing](#contributing)
 
+<br><br>
+
+<img src="assets/workflow.svg" width="960" alt="The apimend pipeline: 1 compare specs, 2 find the requests in your code and what each sends, 3 fix only proven lines, 4 verify with your tests against a mock of the new API, 5 keep the fix only if it is verified, otherwise undo it">
+
 </div>
 
 ---
