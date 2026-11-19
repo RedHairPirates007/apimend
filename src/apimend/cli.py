@@ -28,6 +28,7 @@ from apimend.scan import (
     find_changes,
     find_usages,
     load_spec,
+    unreadable_files,
 )
 from apimend.verify import FAILED, TESTS_ONLY, UNVERIFIED, VERIFIED, Report, VerifyError
 
@@ -90,6 +91,13 @@ def print_usage(usage: Usage) -> None:
         print(f"           - {reason}")
 
 
+def print_unreadable(files: list[tuple[Path, str]]) -> None:
+    """Say which files could not be analysed, so nothing is skipped silently."""
+    print(f"\nWarning: {len(files)} file(s) could not be analysed, so they were not checked:")
+    for file, reason in files:
+        print(f"  {file}: {reason}")
+
+
 def cmd_scan(args: argparse.Namespace) -> int:
     try:
         old, new = load_spec(args.old), load_spec(args.new)
@@ -126,6 +134,9 @@ def cmd_scan(args: argparse.Namespace) -> int:
             strongest = affected.get(key, usage.confidence)
             affected[key] = max(strongest, usage.confidence, key=confidence_rank)
 
+    unreadable = unreadable_files(args.path, args.exclude)
+    if unreadable:
+        print_unreadable(unreadable)
     hidden -= affected.keys()
     if hidden:
         print(
@@ -133,7 +144,8 @@ def cmd_scan(args: argparse.Namespace) -> int:
             f" by --min-confidence {args.min_confidence}."
         )
     if not affected:
-        print("\nYour code does not appear to be affected.")
+        where = " in the files apimend could analyse" if unreadable else ""
+        print(f"\nYour code does not appear to be affected{where}.")
         return 0
     files = {file for file, _ in affected}
     counts = ", ".join(
@@ -158,6 +170,10 @@ def cmd_fix(args: argparse.Namespace) -> int:
         print("No breaking request changes found. Nothing to fix.")
         return 0
 
+    unreadable = unreadable_files(args.path, args.exclude)
+    if unreadable:
+        print_unreadable(unreadable)
+        print()
     edits = plan_fixes(changes, args.path, args.exclude, args.min_confidence)
     threshold = confidence_rank(args.min_confidence)
     skipped = [
@@ -174,7 +190,8 @@ def cmd_fix(args: argparse.Namespace) -> int:
             print("Your code is affected, but apimend has no automatic fix for these changes yet.")
             print(f"Run 'apimend scan {args.old} {args.new} {args.path}' to see where.")
             return 1
-        print("Your code does not appear to be affected. Nothing to fix.")
+        where = " in the files apimend could analyse" if unreadable else ""
+        print(f"Your code does not appear to be affected{where}. Nothing to fix.")
         return 0
 
     print(f"Proposed fix ({len(edits)} line(s), {args.min_confidence} confidence or above):\n")

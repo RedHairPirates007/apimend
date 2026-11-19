@@ -19,6 +19,7 @@ other requests, are not reported.
 
 from __future__ import annotations
 
+import ast
 from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
@@ -28,7 +29,10 @@ import yaml
 from apimend.callsites import NO_BODY, TRACED, CallSite, analyse
 
 HTTP_METHODS = ("get", "put", "post", "delete", "patch", "head", "options", "trace")
-SKIP_DIRS = {".git", ".venv", "venv", "__pycache__", "node_modules", ".pytest_cache", ".ruff_cache"}
+SKIP_DIRS = {
+    ".git", ".venv", "venv", "__pycache__", "node_modules", "site-packages",
+    ".pytest_cache", ".ruff_cache", ".mypy_cache", ".tox", ".nox",
+}  # fmt: skip
 
 REMOVED_PROPERTY = "removed-property"
 NEW_REQUIRED_PROPERTY = "new-required-property"
@@ -179,6 +183,25 @@ def _python_files(root: Path, exclude: Iterable[str] = ()) -> list[Path]:
     return sorted(files)
 
 
+def unreadable_files(root: str | Path, exclude: Iterable[str] = ()) -> list[tuple[Path, str]]:
+    """Python files apimend cannot analyse, with the reason.
+
+    These files are not checked, so they are always reported: apimend never says your
+    code is unaffected without also saying which files it could not read.
+    """
+    problems = []
+    for file in _python_files(Path(root), exclude):
+        try:
+            ast.parse(file.read_text(encoding="utf-8"))
+        except SyntaxError as exc:
+            problems.append((file, f"syntax error on line {exc.lineno}"))
+        except UnicodeDecodeError:
+            problems.append((file, "not UTF-8 text"))
+        except OSError as exc:
+            problems.append((file, f"cannot be read ({exc.strerror})"))
+    return problems
+
+
 def _exact_path(text: str, path: str) -> bool:
     """True if a string names the path exactly (paths with {parameters} only partly match)."""
     return "{" not in path and _path_matches(text, path)
@@ -216,7 +239,10 @@ def _rate_file(source: str, change: Change) -> list[tuple[int, Grade]]:
     if change.kind == REMOVED_PROPERTY:
         for call in relevant:
             for line in call.keys.get(change.prop, []):
-                found.append((line, _grade(_endpoint_checks(call, change))))
+                problems = _endpoint_checks(call, change)
+                if (change.prop, line) in call.maybe:
+                    problems.append(f"'{change.prop}' is only added in some cases")
+                found.append((line, _grade(problems)))
         # Only when a request's body cannot be fully traced can other dictionaries in
         # the file still reach it. Then report them as uncertain, never as proven.
         if loose or any(c.body not in (TRACED, NO_BODY) for c in relevant):
@@ -231,8 +257,13 @@ def _rate_file(source: str, change: Change) -> list[tuple[int, Grade]]:
         for call in relevant:
             problems = _endpoint_checks(call, change)
             if change.kind == NEW_REQUIRED_PROPERTY:
-                if change.prop in call.keys:
-                    continue  # this request already sends it
+                lines = call.keys.get(change.prop, [])
+                if any((change.prop, line) not in call.maybe for line in lines):
+                    continue  # this request always sends it
+                if lines:
+                    problems.append(f"this request sends '{change.prop}' only in some cases")
+                    found.append((call.line, _grade(problems)))
+                    continue
                 if call.body not in (TRACED, NO_BODY):
                     problems.append(
                         f"apimend cannot see everything this request sends ({call.why}),"

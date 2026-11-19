@@ -16,6 +16,7 @@ from apimend.scan import (
     find_changes,
     find_usages,
     load_spec,
+    unreadable_files,
 )
 
 LAB = Path(__file__).resolve().parent.parent / "lab" / "pizza-api"
@@ -402,3 +403,116 @@ def test_common_http_clients_are_understood(tmp_path):
     }
     required = affected(tmp_path, CLIENT_STYLES, SIZE_REQUIRED)
     assert required == {9: HIGH, 14: HIGH, 18: HIGH, 22: HIGH}  # urlopen(req) is not a 2nd request
+
+
+# --- execution order: only data set before a request is part of it ------------
+
+
+def test_a_key_added_after_the_request_is_not_part_of_it(tmp_path):
+    source = (
+        "def create_order(size):\n"
+        '    body = {"pizza": "margherita"}\n'
+        '    requests.post("/orders", json=body)\n'
+        '    body["size"] = size\n'
+    )
+    assert affected(tmp_path, source, SIZE_REMOVED) == {}  # never sent, never changed
+    assert affected(tmp_path, source, Change("POST", "/orders", NEW_REQUIRED_PROPERTY, "size")) == {
+        3: HIGH
+    }
+
+
+def test_changes_after_the_request_do_not_make_it_uncertain(tmp_path):
+    source = (
+        "def create_order(extra):\n"
+        '    body = {"pizza": "margherita"}\n'
+        '    requests.post("/orders", json=body)\n'
+        "    body.update(extra)\n"
+    )
+    assert affected(tmp_path, source, SIZE_REQUIRED) == {3: HIGH}  # traced, missing
+
+
+def test_reassigning_the_body_after_the_request_does_not_hide_it(tmp_path):
+    source = (
+        "def create_order(size):\n"
+        '    body = {"size": size}\n'
+        '    requests.post("/orders", json=body)\n'
+        '    body = {"other": 1}\n'
+    )
+    assert affected(tmp_path, source, SIZE_REMOVED) == {2: HIGH}
+
+
+def test_a_key_added_only_in_some_cases_is_probable(tmp_path):
+    source = (
+        "def create_order(size, express):\n"
+        '    body = {"pizza": "margherita"}\n'
+        "    if express:\n"
+        '        body["size"] = size\n'
+        '    return requests.post("/orders", json=body)\n'
+    )
+    (tmp_path / "client.py").write_text(source)
+    [usage] = find_usages(tmp_path, SIZE_REMOVED)
+    assert (usage.line, usage.confidence) == (4, MEDIUM)
+    assert usage.reasons == ("'size' is only added in some cases",)
+    [usage] = find_usages(tmp_path, Change("POST", "/orders", NEW_REQUIRED_PROPERTY, "size"))
+    assert (usage.line, usage.confidence) == (5, MEDIUM)
+    assert usage.reasons == ("this request sends 'size' only in some cases",)
+
+
+def test_a_body_assigned_only_in_some_cases_is_not_traced(tmp_path):
+    source = (
+        "def create_order(size, express):\n"
+        "    if express:\n"
+        '        body = {"size": size}\n'
+        '    return requests.post("/orders", json=body)\n'
+    )
+    (tmp_path / "client.py").write_text(source)
+    [usage] = find_usages(tmp_path, SIZE_REMOVED)
+    assert usage.confidence == LOW  # reported, never changed automatically
+
+
+def test_a_key_added_later_in_a_loop_reaches_the_next_request(tmp_path):
+    source = (
+        "def send_all(sizes):\n"
+        '    body = {"pizza": "margherita"}\n'
+        "    for size in sizes:\n"
+        '        requests.post("/orders", json=body)\n'
+        '        body["size"] = size\n'
+    )
+    assert affected(tmp_path, source, SIZE_REMOVED) == {5: MEDIUM}
+
+
+def test_module_constants_defined_anywhere_are_followed_inside_functions(tmp_path):
+    source = (
+        "def create_order(size):\n"
+        '    return requests.post(URL, json={"size": size})\n'
+        'URL = BASE + "/orders"\n'
+    )
+    assert affected(tmp_path, source, SIZE_REMOVED) == {2: HIGH}
+
+
+# --- files apimend cannot analyse are reported, never skipped silently ----------
+
+
+def test_unreadable_files_are_listed_with_the_reason(tmp_path):
+    (tmp_path / "ok.py").write_text("x = 1\n")
+    (tmp_path / "broken.py").write_text("def f(:\n")
+    (tmp_path / "latin.py").write_bytes(b"name = '\xe9'\n")
+    found = {file.name: reason for file, reason in unreadable_files(tmp_path)}
+    assert found == {"broken.py": "syntax error on line 1", "latin.py": "not UTF-8 text"}
+
+
+def test_scan_warns_about_files_it_could_not_check(tmp_path, capsys):
+    (tmp_path / "broken.py").write_text("def f(:\n")
+    assert main(["scan", str(V1), str(V2), str(tmp_path)]) == 0
+    out = capsys.readouterr().out
+    assert "Warning: 1 file(s) could not be analysed, so they were not checked:" in out
+    assert "broken.py: syntax error on line 1" in out
+    assert "Your code does not appear to be affected in the files apimend could analyse." in out
+
+
+def test_fix_warns_about_files_it_could_not_check(tmp_path, capsys):
+    (tmp_path / "broken.py").write_text("def f(:\n")
+    assert main(["fix", str(V1), str(V2), str(tmp_path)]) == 0
+    out = capsys.readouterr().out
+    assert "broken.py: syntax error on line 1" in out
+    assert "in the files apimend could analyse. Nothing to fix." in out
