@@ -186,6 +186,10 @@ apimend traces a request body through:
 It understands `requests`, `httpx`, `aiohttp`, `urllib` and your own wrapper functions,
 including URLs built with f-strings, `+` or a constant.
 
+**Order matters.** Only data set *before* a request is part of it: a key added after
+`post(...)` was never sent, so it is never reported or changed. A key added only in some
+cases (inside an `if`, or later in a retry loop) may be sent, so it is `medium` at most.
+
 | Level | Meaning |
 |---|---|
 | `high` | **Proven:** part of what a request to the changed endpoint sends, with the same HTTP method and the exact path |
@@ -200,6 +204,8 @@ apimend says so with the reason, instead of silently skipping it.
 > Current limits: scans **Python** files only, and checks **request bodies and removed
 > endpoints** (not query parameters, headers or responses yet). Bodies built in another file,
 > or passed in as a function parameter, cannot be traced yet and are reported as `low`.
+> Files apimend cannot read (for example, with a syntax error) are listed with a warning,
+> never skipped silently.
 
 ### `apimend fix <old-spec> <new-spec> [folder] --test "<command>"`
 
@@ -391,6 +397,8 @@ apimend/
 - [x] Security hardening: security policy, Dependabot, CodeQL, pinned and verified tools
 - [x] Request-level analysis: each request and its body checked on its own (fixes unrelated
       dictionaries being reported, and missing properties being hidden)
+- [x] Execution-order-aware tracking (only data set before a request counts), and files that
+      cannot be analysed are reported instead of skipped
 - [ ] Repair safety (proven / probable / uncertain) and stricter rename detection (types,
       enums, formats)
 - [ ] Honest verification verdicts, including partial verification and untested endpoints

@@ -15,6 +15,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `--allow-unverified` keeps a fix even when the tests never called the mock API.
 - Every affected line found by `scan` and `fix` has a confidence level: high (proven),
   medium (probable) or low (uncertain), with the reasons when it is not high.
+- `scan` and `fix` list every Python file they could not analyse (for example, because of a
+  syntax error) with the reason, instead of skipping it silently.
 - Request-level analysis (`apimend.callsites`): apimend finds each request in the code, its
   HTTP method, its path and the body it sends, following variables, keys added later,
   helper functions in the same file and `json.dumps(...)`. Works with `requests`, `httpx`,
@@ -28,6 +30,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and could be changed by `fix`, even though it was not part of the request.
 - A newly required property was considered present when any other request in the file sent
   it, so a request missing it could go unreported.
+- A key added to a request body *after* the request was sent was treated as part of it, so
+  `fix` could rename it and a missing required property could go unreported. Only what
+  happens before the request now counts; keys added only in some cases (inside an `if`, or
+  later in a retry loop) are `medium` at most.
 
 ### Changed
 
