@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import http.client
 import os
+import re
 import shlex
 import shutil
 import socket
@@ -46,10 +47,29 @@ HOP_BY_HOP = {
 # The proxy's own response already includes these, so the mock's copies are dropped.
 OWN_HEADERS = {"date", "server"}
 
-VERIFIED = "verified"
-TESTS_ONLY = "tests-only"
-UNVERIFIED = "unverified"
-FAILED = "failed"
+VERIFIED = "verified"  # all the evidence is there, and nothing is left to fix
+PARTIAL = "partially-verified"  # what was tested is correct, but the evidence is incomplete
+TESTS_ONLY = "tests-only"  # tests passed; requests were not checked (--no-mock)
+UNVERIFIED = "unverified"  # tests passed but never called the API
+FAILED = "failed"  # tests failed, or a request did not match the new spec
+
+Endpoint = tuple[str, str]  # (HTTP method, path from the spec), e.g. ("GET", "/orders/{id}")
+
+
+def calls(request: RecordedRequest, endpoint: Endpoint) -> bool:
+    """True if a recorded request called `endpoint`.
+
+    Path parameters match any single segment, the query string is ignored, and a base
+    path in front (such as /v2) is allowed.
+    """
+    method, path = endpoint
+    if request.method.upper() != method.upper():
+        return False
+    pattern = "/".join(
+        "[^/]+" if part.startswith("{") and part.endswith("}") else re.escape(part)
+        for part in path.split("/")
+    )
+    return re.fullmatch(f"(?:/.*)?{pattern}", request.path.split("?", 1)[0]) is not None
 
 
 class VerifyError(Exception):
@@ -89,10 +109,25 @@ class Report:
     mock_used: bool
     requests: list[RecordedRequest] = field(default_factory=list)
     remaining: int = 0  # affected lines still found after the fix
+    affected: list[Endpoint] = field(default_factory=list)  # endpoints with affected code
+    changed: list[Endpoint] = field(default_factory=list)  # endpoints the fix changed
 
     @property
     def mismatches(self) -> list[RecordedRequest]:
         return [r for r in self.requests if not r.matches_spec]
+
+    def _untested(self, endpoints: list[Endpoint]) -> list[Endpoint]:
+        return [e for e in endpoints if not any(calls(r, e) for r in self.requests)]
+
+    @property
+    def untested_affected(self) -> list[Endpoint]:
+        """Affected endpoints the tests never called."""
+        return self._untested(self.affected)
+
+    @property
+    def untested_changed(self) -> list[Endpoint]:
+        """Endpoints the fix changed that the tests never called: no evidence for them."""
+        return self._untested(self.changed)
 
     @property
     def verdict(self) -> str:
@@ -104,6 +139,8 @@ class Report:
             return UNVERIFIED
         if self.mismatches:
             return FAILED
+        if self.remaining or self.untested_affected:
+            return PARTIAL
         return VERIFIED
 
 
@@ -269,8 +306,14 @@ def verify(
     port: int,
     use_mock: bool = True,
     recheck: Callable[[], int] | None = None,
+    affected: list[Endpoint] | None = None,
+    changed: list[Endpoint] | None = None,
 ) -> Report:
-    """Run the tests (against a recorded mock of `spec`) and build a report."""
+    """Run the tests (against a recorded mock of `spec`) and build a report.
+
+    `affected` lists the endpoints with affected code, and `changed` the endpoints the
+    fix changed; the report checks that the tests actually called each of them.
+    """
     if use_mock:
         with MockSession(spec, port) as mock:
             passed, output = run_tests(test_command, port)
@@ -279,4 +322,6 @@ def verify(
         passed, output = run_tests(test_command, port)
         requests = []
     remaining = recheck() if recheck else 0
-    return Report(passed, output, use_mock, requests, remaining)
+    return Report(
+        passed, output, use_mock, requests, remaining, list(affected or []), list(changed or [])
+    )

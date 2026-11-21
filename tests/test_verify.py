@@ -14,6 +14,7 @@ import pytest
 from apimend.cli import main
 from apimend.verify import (
     FAILED,
+    PARTIAL,
     TESTS_ONLY,
     UNVERIFIED,
     VERIFIED,
@@ -109,6 +110,45 @@ def test_verdict_only_claims_what_the_evidence_shows(report, verdict):
     assert report.verdict == verdict
 
 
+ORDERS = ("POST", "/orders")
+PLACED = RecordedRequest("POST", "/orders", 201)
+
+
+def test_leftover_affected_lines_prevent_a_full_verification():
+    report = Report(True, "", True, [PLACED], remaining=1, affected=[ORDERS], changed=[ORDERS])
+    assert report.verdict == PARTIAL
+    assert report.untested_changed == []  # the fix itself was tested
+
+
+def test_an_affected_endpoint_the_tests_never_called_prevents_a_full_verification():
+    menu = RecordedRequest("GET", "/menu", 200)
+    report = Report(True, "", True, [menu], affected=[ORDERS], changed=[ORDERS])
+    assert report.verdict == PARTIAL
+    assert report.untested_affected == [ORDERS]
+    assert report.untested_changed == [ORDERS]
+
+
+def test_full_verification_needs_every_affected_endpoint_called():
+    report = Report(True, "", True, [PLACED], affected=[ORDERS], changed=[ORDERS])
+    assert report.verdict == VERIFIED
+
+
+@pytest.mark.parametrize(
+    ("request_", "called"),
+    [
+        (RecordedRequest("GET", "/orders/42", 200), True),  # path parameter
+        (RecordedRequest("GET", "/orders/42?expand=items", 200), True),  # query string
+        (RecordedRequest("GET", "/v2/orders/42", 200), True),  # base path in front
+        (RecordedRequest("DELETE", "/orders/42", 204), False),  # another HTTP method
+        (RecordedRequest("GET", "/orders/42/items", 200), False),  # another endpoint
+        (RecordedRequest("GET", "/archive-orders/42", 200), False),  # not a path boundary
+    ],
+)
+def test_requests_are_matched_to_the_endpoints_they_call(request_, called):
+    report = Report(True, "", True, [request_], affected=[("GET", "/orders/{id}")])
+    assert (report.untested_affected == []) is called
+
+
 @pytest.fixture
 def lab(tmp_path):
     """A private copy of the Pizza API lab, so tests can change it safely."""
@@ -176,3 +216,38 @@ def test_proxy_never_passes_line_breaks_in_headers(proxy):
     assert not any(line[:1] in (" ", "\t") for line in lines)  # nothing continues a header
     names = [line.split(":", 1)[0].lower() for line in lines[1:]]
     assert len(names) == len(set(names))  # no header is sent twice
+
+
+@needs_prism
+def test_a_partial_repair_is_kept_but_not_called_verified(lab, capsys, monkeypatch):
+    # A second request apimend is less sure about (the HTTP method is unknown), so it
+    # is left for review instead of being changed.
+    (lab / "app" / "extra.py").write_text(
+        'def reorder(size):\n    return send("/orders", {"size": size})\n'
+    )
+    port = free_port()
+    monkeypatch.setenv("PIZZA_API_URL", f"http://127.0.0.1:{port}")  # the lab's API address
+    command = f"{PYTHON} -m pytest -q -p no:cacheprovider {shlex.quote(str(lab / 'app'))}"
+    assert main(fix_args(lab, "--port", str(port), "--test", command)) == 1
+    out = capsys.readouterr().out
+    assert "Re-scan: 1 affected line(s) remain with the fix applied, for you to review" in out
+    assert "PARTIALLY VERIFIED" in out and "the fix has been kept" in out
+    assert "VERIFIED against the new spec" not in out
+    assert '"pizza_size": size' in (lab / "app" / "pizza_client.py").read_text()
+
+
+@needs_prism
+def test_a_fix_the_tests_never_exercised_is_undone(lab, capsys, monkeypatch):
+    before = (lab / "app" / "pizza_client.py").read_bytes()
+    (lab / "app" / "test_pizza_client.py").write_text(
+        "import pizza_client\n\n\ndef test_menu():\n    assert pizza_client.get_menu()\n"
+    )
+    port = free_port()
+    monkeypatch.setenv("PIZZA_API_URL", f"http://127.0.0.1:{port}")  # the lab's API address
+    command = f"{PYTHON} -m pytest -q -p no:cacheprovider {shlex.quote(str(lab / 'app'))}"
+    assert main(fix_args(lab, "--port", str(port), "--test", command)) == 1
+    out = capsys.readouterr().out
+    assert "[missing] Coverage: your tests never called POST /orders" in out
+    assert "your tests never called POST /orders, which the fix changes" in out
+    assert "The fix was undone." in out
+    assert (lab / "app" / "pizza_client.py").read_bytes() == before

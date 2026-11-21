@@ -24,7 +24,7 @@ from apimend.scan import (
     confidence_rank,
     find_usages,
 )
-from apimend.verify import TESTS_ONLY, UNVERIFIED, VERIFIED, Report, verify
+from apimend.verify import PARTIAL, TESTS_ONLY, UNVERIFIED, VERIFIED, Endpoint, Report, verify
 
 QUOTES = ("'", '"')
 
@@ -51,6 +51,7 @@ class Edit:
     line: int
     before: str
     after: str
+    endpoint: tuple[str, str] = ("", "")  # (method, path) of the request this edit fixes
 
 
 def find_renames(changes: Iterable[Change]) -> list[Rename]:
@@ -128,6 +129,7 @@ def plan_fixes(
     """
     # (file, line) -> list of (start byte, end byte, replacement text)
     replacements: dict[tuple[Path, int], list[tuple[int, int, str]]] = {}
+    endpoints: dict[tuple[Path, int], tuple[str, str]] = {}  # which request each line belongs to
     by_rename: dict[Rename, dict[Path, set[int]]] = {}
     for rename, usage in rename_usages(changes, root, exclude):
         if confidence_rank(usage.confidence) < confidence_rank(min_confidence):
@@ -150,6 +152,7 @@ def plan_fixes(
                     key = (file, node.lineno)
                     span = (start, end, replacement)
                     replacements.setdefault(key, []).append(span)
+                    endpoints.setdefault(key, (rename.method, rename.path))
 
     edits = []
     for (file, line), spans in sorted(replacements.items()):
@@ -157,7 +160,7 @@ def plan_fixes(
         data = text.encode("utf-8")  # ast column offsets count bytes, not characters
         for start, end, replacement in sorted(spans, reverse=True):  # right to left
             data = data[:start] + replacement.encode("utf-8") + data[end:]
-        edits.append(Edit(file, line, text, data.decode("utf-8")))
+        edits.append(Edit(file, line, text, data.decode("utf-8"), endpoints[(file, line)]))
     return edits
 
 
@@ -213,20 +216,33 @@ def apply_and_verify(
     use_mock: bool = True,
     allow_unverified: bool = False,
     recheck: Callable[[], int] | None = None,
+    affected: list[Endpoint] | None = None,
 ) -> tuple[Report, bool]:
     """Apply `edits`, verify them, and undo them unless the evidence supports keeping them.
 
-    Returns the verification report and whether the fix was kept.
+    A fix is kept when it is verified, or when it is partially verified but every
+    request it changed was tested (the rest of the code still needs attention, but the
+    change itself is proven). Returns the verification report and whether it was kept.
     """
+    changed = sorted({edit.endpoint for edit in edits if edit.endpoint != ("", "")})
     originals = apply_edits(edits)
     try:
-        report = verify(test_command, spec, port, use_mock=use_mock, recheck=recheck)
+        report = verify(
+            test_command,
+            spec,
+            port,
+            use_mock=use_mock,
+            recheck=recheck,
+            affected=affected,
+            changed=changed,
+        )
     except BaseException:
         restore(originals)
         raise
-    keep = report.verdict in (VERIFIED, TESTS_ONLY) or (
-        report.verdict == UNVERIFIED and allow_unverified
+    proven = report.verdict in (VERIFIED, TESTS_ONLY) or (
+        report.verdict == PARTIAL and not report.untested_changed
     )
+    keep = proven or (report.verdict in (UNVERIFIED, PARTIAL) and allow_unverified)
     if not keep:
         restore(originals)
     return report, keep
