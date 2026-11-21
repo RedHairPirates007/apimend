@@ -15,6 +15,7 @@ from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from pathlib import Path
 
+from apimend.safety import check_writable, write_file
 from apimend.scan import (
     HIGH,
     NEW_REQUIRED_PROPERTY,
@@ -189,23 +190,29 @@ def render_diff(edits: list[Edit]) -> str:
     return "".join(parts)
 
 
-def apply_edits(edits: list[Edit]) -> dict[Path, bytes]:
-    """Write the edits to disk and return the original file contents, for undoing."""
+def apply_edits(edits: list[Edit], root: str | Path) -> dict[Path, bytes]:
+    """Write the edits to disk and return the original file contents, for undoing.
+
+    Every file is checked before anything is written: if any of them is a symbolic link
+    or is not inside `root`, nothing is changed at all.
+    """
+    for file in {edit.file for edit in edits}:
+        check_writable(root, file)
     new_contents = _new_contents(edits)
     originals = {file: file.read_bytes() for file in new_contents}
     try:
         for file, text in new_contents.items():
-            file.write_bytes(text.encode("utf-8"))
+            write_file(root, file, text.encode("utf-8"))
     except BaseException:
-        restore(originals)
+        restore(originals, root)
         raise
     return originals
 
 
-def restore(originals: dict[Path, bytes]) -> None:
+def restore(originals: dict[Path, bytes], root: str | Path) -> None:
     """Put files back exactly as they were."""
     for file, data in originals.items():
-        file.write_bytes(data)
+        write_file(root, file, data)
 
 
 def apply_and_verify(
@@ -217,6 +224,8 @@ def apply_and_verify(
     allow_unverified: bool = False,
     recheck: Callable[[], int] | None = None,
     affected: list[Endpoint] | None = None,
+    *,
+    root: str | Path,
 ) -> tuple[Report, bool]:
     """Apply `edits`, verify them, and undo them unless the evidence supports keeping them.
 
@@ -225,7 +234,7 @@ def apply_and_verify(
     change itself is proven). Returns the verification report and whether it was kept.
     """
     changed = sorted({edit.endpoint for edit in edits if edit.endpoint != ("", "")})
-    originals = apply_edits(edits)
+    originals = apply_edits(edits, root)
     try:
         report = verify(
             test_command,
@@ -237,12 +246,12 @@ def apply_and_verify(
             changed=changed,
         )
     except BaseException:
-        restore(originals)
+        restore(originals, root)
         raise
     proven = report.verdict in (VERIFIED, TESTS_ONLY) or (
         report.verdict == PARTIAL and not report.untested_changed
     )
     keep = proven or (report.verdict in (UNVERIFIED, PARTIAL) and allow_unverified)
     if not keep:
-        restore(originals)
+        restore(originals, root)
     return report, keep

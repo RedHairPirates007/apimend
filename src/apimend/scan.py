@@ -20,6 +20,7 @@ other requests, are not reported.
 from __future__ import annotations
 
 import ast
+import os
 from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
@@ -27,6 +28,7 @@ from pathlib import Path, PurePosixPath
 import yaml
 
 from apimend.callsites import NO_BODY, TRACED, CallSite, analyse
+from apimend.safety import LINKED_FOLDER, unsafe_reason
 
 HTTP_METHODS = ("get", "put", "post", "delete", "patch", "head", "options", "trace")
 SKIP_DIRS = {
@@ -170,27 +172,58 @@ def _path_matches(text: str, path: str) -> bool:
     return text == path or text.endswith(path)
 
 
+def _walk(root: Path, exclude: Iterable[str] = ()) -> tuple[list[Path], list[tuple[Path, str]]]:
+    """Python files under `root` that are safe to analyse, and the ones that are not.
+
+    Tool folders and `exclude` patterns are skipped. Symbolic links are never followed,
+    so apimend cannot be led outside `root`; they are returned with the reason instead.
+    """
+    exclude = list(exclude)
+    files: list[Path] = []
+    refused: list[tuple[Path, str]] = []
+
+    def excluded(path: Path) -> bool:
+        relative = PurePosixPath(path.relative_to(root).as_posix())
+        return any(relative.match(pattern) for pattern in exclude)
+
+    for folder, subfolders, names in os.walk(root, followlinks=False):
+        here = Path(folder)
+        kept = []
+        for name in sorted(subfolders):
+            if name in SKIP_DIRS:
+                continue
+            if (here / name).is_symlink():
+                if not excluded(here / name):
+                    refused.append((here / name, LINKED_FOLDER))
+                continue
+            kept.append(name)
+        subfolders[:] = kept  # os.walk only descends into the folders left in this list
+        for name in names:
+            file = here / name
+            if not name.endswith(".py") or excluded(file):
+                continue
+            reason = unsafe_reason(root, file)
+            if reason:
+                refused.append((file, reason))
+            else:
+                files.append(file)
+    return sorted(files), sorted(refused)
+
+
 def _python_files(root: Path, exclude: Iterable[str] = ()) -> list[Path]:
-    """Python files under `root`, skipping tool folders and any `exclude` patterns."""
-    files = []
-    for file in root.rglob("*.py"):
-        relative = file.relative_to(root)
-        if SKIP_DIRS.intersection(relative.parts):
-            continue
-        if any(PurePosixPath(relative.as_posix()).match(pattern) for pattern in exclude):
-            continue
-        files.append(file)
-    return sorted(files)
+    """Python files under `root` that are safe to analyse."""
+    return _walk(root, exclude)[0]
 
 
 def unreadable_files(root: str | Path, exclude: Iterable[str] = ()) -> list[tuple[Path, str]]:
     """Python files apimend cannot analyse, with the reason.
 
     These files are not checked, so they are always reported: apimend never says your
-    code is unaffected without also saying which files it could not read.
+    code is unaffected without also saying which files it could not read. Symbolic links
+    are included here, because they are never followed.
     """
-    problems = []
-    for file in _python_files(Path(root), exclude):
+    files, problems = _walk(Path(root), exclude)
+    for file in files:
         try:
             ast.parse(file.read_text(encoding="utf-8"))
         except SyntaxError as exc:

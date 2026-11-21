@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `--format json` on `scan` and `fix`: one JSON document on standard output (and nothing
+  else, even on errors) with a `schema_version`, every change, every affected line with its
+  confidence and reasons, files that could not be analysed, and for `fix` the proposed edits
+  and the full verification report. For CI jobs, scripts and AI agents.
 - `apimend fix` prints a verification report listing exactly what was checked: tests,
   every request your tests sent to the mock (and whether it matched the new spec), a re-scan
   for remaining affected code, and what was not checked (the live API).
@@ -57,6 +61,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 
+- apimend no longer follows symbolic links. Previously a link inside the project could point
+  to a file anywhere on the computer, and `fix` could change that file. Linked files and
+  folders are now reported as not analysed, and are never read or changed. Every file is
+  checked again right before it is written, nothing is written if any file is unsafe, and
+  the write itself refuses to follow a link. Files with other hard links are not changed.
 - Added a security policy (`SECURITY.md`) with private vulnerability reporting.
 - Dependabot now monitors Python dependencies and GitHub Actions.
 - CI runs with read-only permissions and does not keep a GitHub token on disk.
