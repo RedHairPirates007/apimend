@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `--rename OLD=NEW` on `fix`, and `renames` under `[tool.apimend]` in `pyproject.toml`, to
+  approve a rename apimend could not confirm. An approval that matches no endpoint is an error.
 - `--request-function NAME` on `scan` and `fix`, and `request-functions` under `[tool.apimend]`
   in `pyproject.toml`, to declare your own functions that send HTTP requests.
 - `--format json` on `scan` and `fix`: one JSON document on standard output (and nothing
@@ -35,6 +37,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- A removed property and a new required one on the same endpoint were treated as a rename,
+  so `fix` could rename `quantity` to `customer_id`. A rename is now only confirmed when the
+  schemas match (type, format, allowed values, array items, object fields) and the names are
+  related; anything less is reported as a possible rename, with the reasons, and is only
+  applied if you approve it. JSON output includes each rename's status and reasons.
 - A call now only counts as an HTTP request when there is evidence: a known HTTP client
   recognised through the file's imports (`requests`, `httpx`, `aiohttp`, `urllib.request`,
   `http.client`, and their session and client objects), a wrapper in the same file proven to

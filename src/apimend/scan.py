@@ -28,6 +28,7 @@ from pathlib import Path, PurePosixPath
 import yaml
 
 from apimend.callsites import NO_BODY, TRACED, Analysis, CallSite, analyse
+from apimend.renames import CONFIRMED, pair
 from apimend.safety import LINKED_FOLDER, unsafe_reason
 
 HTTP_METHODS = ("get", "put", "post", "delete", "patch", "head", "options", "trace")
@@ -57,6 +58,9 @@ class Change:
     kind: str
     prop: str = ""
     hint: str = ""
+    partner: str = ""  # the other side of a possible rename
+    rename: str = ""  # CONFIRMED or POSSIBLE (see apimend.renames), or ""
+    rename_reasons: tuple[str, ...] = ()  # why a possible rename is not confirmed
 
     def describe(self) -> str:
         endpoint = f"{self.method} {self.path}"
@@ -142,8 +146,9 @@ def find_changes(old: dict, new: dict) -> list[Change]:
 
             old_schema = _request_schema(old_op, old)
             new_schema = _request_schema(new_op, new)
-            old_props = set(old_schema.get("properties") or {})
-            new_props = set(new_schema.get("properties") or {})
+            old_properties = old_schema.get("properties") or {}
+            new_properties = new_schema.get("properties") or {}
+            old_props, new_props = set(old_properties), set(new_properties)
             old_required = set(old_schema.get("required") or [])
             new_required = set(new_schema.get("required") or [])
 
@@ -151,17 +156,37 @@ def find_changes(old: dict, new: dict) -> list[Change]:
             newly_required = sorted(new_required - old_required)
             brand_new = [p for p in newly_required if p not in old_props]
 
-            # One property disappeared and one new required property appeared:
-            # that is very likely a rename.
-            rename = len(removed) == 1 and len(brand_new) == 1
-            for prop in removed:
-                hint = f"looks like it was renamed to '{brand_new[0]}'" if rename else ""
-                changes.append(Change(name, path, REMOVED_PROPERTY, prop, hint))
-            for prop in newly_required:
-                is_new_name = rename and prop in brand_new
-                hint = f"looks like the new name for '{removed[0]}'" if is_new_name else ""
-                changes.append(Change(name, path, NEW_REQUIRED_PROPERTY, prop, hint))
+            # A removed property and a new required one are only a rename when the
+            # evidence says so (see apimend.renames): never just because they appear
+            # together.
+            renames = pair(
+                {p: old_properties[p] for p in removed},
+                {p: new_properties.get(p, {}) for p in brand_new},
+                old,
+                new,
+            )
+            for prop in [*removed, *newly_required]:
+                kind = REMOVED_PROPERTY if prop in removed else NEW_REQUIRED_PROPERTY
+                partner, status, reasons = renames.get(prop, ("", "", ()))
+                hint = _rename_hint(kind, prop, partner, status, reasons)
+                changes.append(Change(name, path, kind, prop, hint, partner, status, reasons))
     return changes
+
+
+def _rename_hint(kind: str, prop: str, partner: str, status: str, reasons: tuple[str, ...]) -> str:
+    """Explain a rename, and how sure apimend is about it."""
+    if not status:
+        return ""
+    if kind == NEW_REQUIRED_PROPERTY:
+        if status == CONFIRMED:
+            return f"the new name for '{partner}'"
+        return f"may be the new name for '{partner}' (not confirmed)"
+    if status == CONFIRMED:
+        return f"renamed to '{partner}' (same schema, related name)"
+    return (
+        f"may have been renamed to '{partner}', but this is not confirmed: "
+        f"{'; '.join(reasons)}. If it was, approve it with --rename {prop}={partner}"
+    )
 
 
 def _path_matches(text: str, path: str) -> bool:
