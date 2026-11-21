@@ -52,6 +52,15 @@ def change_json(change: Change) -> dict[str, Any]:
         "property": change.prop or None,
         "description": change.describe(),
         "hint": change.hint or None,
+        "rename": (
+            {
+                "partner": change.partner,
+                "status": change.rename,
+                "unconfirmed_because": list(change.rename_reasons),
+            }
+            if change.rename
+            else None
+        ),
     }
 
 

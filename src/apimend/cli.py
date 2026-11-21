@@ -19,8 +19,17 @@ import sys
 from pathlib import Path
 
 from apimend import __version__
-from apimend.config import ConfigError, request_functions
-from apimend.fix import FixError, apply_and_verify, plan_fixes, rename_usages, render_diff
+from apimend.config import ConfigError, load, parse_rename
+from apimend.fix import (
+    FixError,
+    Rename,
+    apply_and_verify,
+    find_renames,
+    plan_fixes,
+    rename_usages,
+    render_diff,
+    unmatched_approvals,
+)
 from apimend.output import (
     change_json,
     document,
@@ -29,6 +38,7 @@ from apimend.output import (
     unreadable_json,
     usage_json,
 )
+from apimend.renames import POSSIBLE
 from apimend.safety import UnsafePathError
 from apimend.scan import (
     CONFIDENCE_LEVELS,
@@ -36,6 +46,8 @@ from apimend.scan import (
     LOW,
     MEDIUM,
     REMOVED_ENDPOINT,
+    REMOVED_PROPERTY,
+    Change,
     SpecError,
     Usage,
     confidence_rank,
@@ -137,10 +149,16 @@ def cmd_scan(args: argparse.Namespace) -> int:
     if not Path(args.path).is_dir():
         return fail(args, f"{args.path} is not a folder")
     try:
-        args.functions = [*args.request_function, *request_functions(args.path)]
+        settings = load(args.path)
+        args.functions = [*args.request_function, *settings.request_functions]
+        cli_renames = [parse_rename(text) for text in getattr(args, "rename", [])]
     except ConfigError as exc:
         return fail(args, str(exc))
-    args.out.setdefault("inputs", {})["request_functions"] = args.functions
+    args.approved = [*cli_renames, *settings.renames]
+    inputs = args.out.setdefault("inputs", {})
+    inputs["request_functions"] = args.functions
+    if args.command == "fix":
+        inputs["renames"] = [f"{before}={after}" for before, after in args.approved]
 
     changes = find_changes(old, new)
     out.update(
@@ -227,10 +245,16 @@ def cmd_fix(args: argparse.Namespace) -> int:
     if not Path(args.path).is_dir():
         return fail(args, f"{args.path} is not a folder")
     try:
-        args.functions = [*args.request_function, *request_functions(args.path)]
+        settings = load(args.path)
+        args.functions = [*args.request_function, *settings.request_functions]
+        cli_renames = [parse_rename(text) for text in getattr(args, "rename", [])]
     except ConfigError as exc:
         return fail(args, str(exc))
-    args.out.setdefault("inputs", {})["request_functions"] = args.functions
+    args.approved = [*cli_renames, *settings.renames]
+    inputs = args.out.setdefault("inputs", {})
+    inputs["request_functions"] = args.functions
+    if args.command == "fix":
+        inputs["renames"] = [f"{before}={after}" for before, after in args.approved]
 
     changes = find_changes(old, new)
     out.update(
@@ -246,23 +270,50 @@ def cmd_fix(args: argparse.Namespace) -> int:
         out["result"] = "no-changes"
         return 0
 
+    unmatched = unmatched_approvals(changes, args.approved)
+    if unmatched:
+        before, after = unmatched[0]
+        return fail(
+            args,
+            f"rename {before}={after} does not match the specs: no endpoint removes"
+            f" '{before}' and requires '{after}'",
+        )
+
     unreadable = unreadable_files(args.path, args.exclude)
     out["unreadable_files"] = unreadable_json(unreadable)
     if unreadable:
         print_unreadable(unreadable)
         print()
+    renames = find_renames(changes, args.approved)
+    out["renames"] = [
+        {
+            "method": r.method,
+            "path": r.path,
+            "old": r.old,
+            "new": r.new,
+            "approved": r.approved,
+            "unconfirmed_because": list(r.unconfirmed),
+        }
+        for r in renames
+    ]
+    print_approved(renames)
     edits = plan_fixes(
         changes,
         args.path,
         args.exclude,
         args.min_confidence,
         request_functions=args.functions,
+        approved=args.approved,
     )
     threshold = confidence_rank(args.min_confidence)
     skipped = [
         usage
         for _, usage in rename_usages(
-            changes, args.path, args.exclude, request_functions=args.functions
+            changes,
+            args.path,
+            args.exclude,
+            request_functions=args.functions,
+            approved=args.approved,
         )
         if confidence_rank(usage.confidence) < threshold
     ]
@@ -277,7 +328,10 @@ def cmd_fix(args: argparse.Namespace) -> int:
             find_usages(args.path, change, args.exclude, request_functions=args.functions)
             for change in changes
         ):
-            print("Your code is affected, but apimend has no automatic fix for these changes yet.")
+            if print_possible(changes, renames):
+                print("\nNothing was changed, because no rename is confirmed or approved.")
+            else:
+                print("Your code is affected, but apimend has no automatic fix for it yet.")
             print(f"Run 'apimend scan {args.old} {args.new} {args.path}' to see where.")
             out["result"] = "no-automatic-fix"
             return 1
@@ -288,6 +342,8 @@ def cmd_fix(args: argparse.Namespace) -> int:
 
     print(f"Proposed fix ({len(edits)} line(s), {args.min_confidence} confidence or above):\n")
     print(render_diff(edits))
+    if print_possible(changes, renames):
+        print()
     if skipped:
         print_skipped(skipped, args.min_confidence)
         print()
@@ -341,6 +397,38 @@ def cmd_fix(args: argparse.Namespace) -> int:
     out.update(result=report.verdict, files_changed=kept, verification=report_json(report, kept))
     print_report(report, args.new)
     return print_outcome(report, kept)
+
+
+def print_approved(renames: list[Rename]) -> None:
+    """Show renames the developer approved, and what apimend could not confirm."""
+    for rename in renames:
+        if not rename.approved:
+            continue
+        print(f"Using your approved rename: '{rename.old}' -> '{rename.new}'.")
+        if rename.unconfirmed:
+            print(f"  apimend could not confirm it: {'; '.join(rename.unconfirmed)}.")
+            print("  Renaming the key will not change the value it sends.")
+        print()
+
+
+def print_possible(changes: list[Change], renames: list[Rename]) -> bool:
+    """List possible renames that were not applied. True if there were any."""
+    applied = {(r.method, r.path, r.old) for r in renames}
+    possible = [
+        c
+        for c in changes
+        if c.kind == REMOVED_PROPERTY
+        and c.rename == POSSIBLE
+        and (c.method, c.path, c.prop) not in applied
+    ]
+    for change in possible:
+        print(
+            f"Possible rename, not applied: {change.method} {change.path} '{change.prop}'"
+            f" -> '{change.partner}'"
+        )
+        print(f"  not confirmed because: {'; '.join(change.rename_reasons)}")
+        print(f"  if it is a rename, approve it with --rename {change.prop}={change.partner}")
+    return bool(possible)
 
 
 def print_skipped(skipped: list[Usage], min_confidence: str) -> None:
@@ -519,6 +607,14 @@ def build_parser() -> argparse.ArgumentParser:
         choices=CONFIDENCE_LEVELS,
         default=HIGH,
         help="only change lines found with at least this confidence (default: high)",
+    )
+    fix.add_argument(
+        "--rename",
+        action="append",
+        default=[],
+        metavar="OLD=NEW",
+        help="approve a rename apimend could not confirm, e.g. quantity=customer_id (can be"
+        " repeated; also read from [tool.apimend] renames in pyproject.toml)",
     )
     fix.add_argument(
         "--request-function",

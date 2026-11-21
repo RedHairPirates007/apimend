@@ -9,13 +9,15 @@ import pytest
 
 from apimend.cli import main
 from apimend.fix import apply_edits, find_renames, plan_fixes, render_diff, restore
+from apimend.renames import CONFIRMED
 from apimend.scan import NEW_REQUIRED_PROPERTY, REMOVED_PROPERTY, Change, find_changes, load_spec
 
 LAB = Path(__file__).resolve().parent.parent / "lab" / "pizza-api"
 PYTHON = shlex.quote(sys.executable)
+# A rename apimend confirmed (matching schemas and related names), as find_changes reports it.
 RENAME_CHANGES = [
-    Change("POST", "/orders", REMOVED_PROPERTY, "size", "renamed"),
-    Change("POST", "/orders", NEW_REQUIRED_PROPERTY, "pizza_size", "new name"),
+    Change("POST", "/orders", REMOVED_PROPERTY, "size", "", "pizza_size", CONFIRMED),
+    Change("POST", "/orders", NEW_REQUIRED_PROPERTY, "pizza_size", "", "size", CONFIRMED),
 ]
 
 
@@ -53,8 +55,14 @@ def test_find_renames_pairs_old_and_new_names():
 
 
 def test_find_renames_skips_ambiguous_cases():
-    extra = Change("POST", "/orders", NEW_REQUIRED_PROPERTY, "pizza_type", "new name")
-    assert find_renames([*RENAME_CHANGES, extra]) == []
+    def spec(properties):
+        schema = {"type": "object", "properties": properties, "required": list(properties)}
+        body = {"content": {"application/json": {"schema": schema}}}
+        return {"paths": {"/orders": {"post": {"requestBody": body}}}}
+
+    size = {"type": "string"}
+    changes = find_changes(spec({"size": size}), spec({"pizza_size": size, "size_label": size}))
+    assert find_renames(changes) == []  # two equally good candidates: no rename
 
 
 def test_plan_changes_only_the_dictionary_key(lab):

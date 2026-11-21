@@ -49,7 +49,7 @@ apimend aims to close that gap.
 | Compare two OpenAPI specs | ✅ Available | Specs you provide (YAML or JSON) |
 | Detect breaking changes | ✅ Available | Via [oasdiff](https://github.com/oasdiff/oasdiff) |
 | Find affected code | ✅ Available | **Python only**; request bodies and removed endpoints; only calls proven to be HTTP requests count; each request and its body checked on its own; every line rated high / medium / low confidence |
-| Detect renamed properties | 🟡 Limited | One removed + one new required property on the same endpoint |
+| Detect renamed properties | ✅ Available | Confirmed only when the schemas match **and** the names are related; otherwise reported as possible, and applied only if you approve it |
 | Fix code automatically | 🟡 Limited | Renamed request properties only |
 | Verify fixes | ✅ Available | Records every request your tests send to a **mock generated from the new spec** and checks it matches — not the live API |
 | JSON output for scripts and agents | ✅ Available | `scan` and `fix` with `--format json` |
@@ -149,11 +149,11 @@ $ apimend scan lab/pizza-api/v1.yaml lab/pizza-api/v2.yaml lab/pizza-api/app
 Scanning lab/pizza-api/app for code affected by 2 breaking change(s)...
 
 POST /orders: request property 'size' was removed
-  hint: looks like it was renamed to 'pizza_size'
+  hint: renamed to 'pizza_size' (same schema, related name)
   [high]   lab/pizza-api/app/pizza_client.py:34: return _request("POST", "/orders", {"pizza": pizza, "size": size})
 
 POST /orders: request property 'pizza_size' is now required
-  hint: looks like the new name for 'size'
+  hint: the new name for 'size'
   [high]   lab/pizza-api/app/pizza_client.py:34: return _request("POST", "/orders", {"pizza": pizza, "size": size})
 
 Found 1 affected line(s) in 1 file(s): 1 high, 0 medium, 0 low confidence.
@@ -309,8 +309,37 @@ Review the change with 'git diff' before committing it.
 
 > [!NOTE]
 > `fix` currently repairs **renamed request properties** in Python code (dictionary keys such
-> as `{"size": ...}` and lookups such as `body["size"]`). It only acts when the rename is
-> unambiguous.
+> as `{"size": ...}` and lookups such as `body["size"]`).
+
+**When is it a rename?** A property that disappears while a new required one appears is not
+proof of a rename: removing `quantity` and requiring `customer_id` are two unrelated changes.
+apimend only **confirms** a rename when both pieces of evidence agree:
+
+| Evidence | Confirms | Does not confirm |
+|---|---|---|
+| The schemas match: type, format, allowed values, array items, object fields | `size: string (small/medium/large)` → `pizza_size: string (small/medium/large)` | `quantity: integer` → `customer_id: string` |
+| The names are related: one contains the other's words, or only the spelling changed | `size` → `pizza_size`, `customerId` → `customer_id` | `quantity` → `customer_id`; `id` → `customer_id` (only the generic word "id" is shared) |
+
+Anything less is a **possible** rename. `fix` never applies it; it explains why it is not
+confirmed and how to approve it if you know it is a rename:
+
+```console
+$ apimend fix v1.yaml v2.yaml app
+Possible rename, not applied: POST /orders 'quantity' -> 'customer_id'
+  not confirmed because: types differ: integer -> string; the names are not related
+  if it is a rename, approve it with --rename quantity=customer_id
+```
+
+Approve with `--rename quantity=customer_id` (repeatable), or in `pyproject.toml`:
+
+```toml
+[tool.apimend]
+renames = { quantity = "customer_id" }
+```
+
+An approved rename is still checked by the same verification as any other fix. If the types
+differ, apimend warns you that renaming the key does not change the value it sends. An
+approval that matches no endpoint (for example a typo) stops `fix` with an error.
 
 > [!WARNING]
 > **What `VERIFIED` means:** your tests passed, every request they sent matched the new spec,
@@ -344,7 +373,8 @@ apimend scan lab/pizza-api/v1.yaml lab/pizza-api/v2.yaml lab/pizza-api --format 
       "path": "/orders",
       "property": "size",
       "description": "POST /orders: request property 'size' was removed",
-      "hint": "looks like it was renamed to 'pizza_size'",
+      "hint": "renamed to 'pizza_size' (same schema, related name)",
+      "rename": {"partner": "pizza_size", "status": "confirmed", "unconfirmed_because": []},
       "usages": [
         {
           "file": "lab/pizza-api/app/pizza_client.py",
@@ -496,8 +526,10 @@ apimend/
 - [x] Honest verification verdicts: `VERIFIED` needs every affected endpoint called and nothing
       left to fix; otherwise `PARTIALLY VERIFIED`
 - [x] JSON output (`--format json`) for scripts, CI and AI agents
-- [ ] Repair safety (proven / probable / uncertain) and stricter rename detection (types,
-      enums, formats)
+- [x] Evidence-based renames: confirmed only when schemas match and names are related;
+      otherwise only applied with `--rename OLD=NEW`
+- [x] Only calls proven to be HTTP requests count; symbolic links are never followed
+- [ ] Crash-safe repairs: atomic writes, original-file hashes, recovery after interruption
 - [ ] A first benchmark measuring precision, recall and wrong automatic repairs
 
 **v0.3 — Better code intelligence**

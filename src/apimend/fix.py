@@ -15,6 +15,7 @@ from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from pathlib import Path
 
+from apimend.renames import CONFIRMED
 from apimend.safety import check_writable, write_file
 from apimend.scan import (
     HIGH,
@@ -42,6 +43,8 @@ class Rename:
     path: str
     old: str
     new: str
+    approved: bool = False  # approved by the developer rather than confirmed by apimend
+    unconfirmed: tuple[str, ...] = ()  # why apimend could not confirm an approved rename
 
 
 @dataclass(frozen=True)
@@ -55,23 +58,49 @@ class Edit:
     endpoint: tuple[str, str] = ("", "")  # (method, path) of the request this edit fixes
 
 
-def find_renames(changes: Iterable[Change]) -> list[Rename]:
-    """Pair each removed property with the new property that most likely replaced it."""
+def find_renames(
+    changes: Iterable[Change], approved: Iterable[tuple[str, str]] = ()
+) -> list[Rename]:
+    """The renames `fix` may apply.
+
+    A rename is applied when apimend confirmed it (matching schemas and related names,
+    see `apimend.renames`), or when the developer approved it as `(old, new)`. A
+    possible but unconfirmed rename is never applied on its own.
+    """
     changes = list(changes)
+    approved = set(approved)
+    approved_old = {old for old, _ in approved}
     renames = []
     for removed in changes:
-        if removed.kind != REMOVED_PROPERTY or not removed.hint:
+        if removed.kind != REMOVED_PROPERTY:
             continue
-        candidates = [
-            added.prop
-            for added in changes
-            if added.kind == NEW_REQUIRED_PROPERTY
-            and added.hint
-            and (added.method, added.path) == (removed.method, removed.path)
-        ]
-        if len(candidates) == 1:  # only fix when the rename is unambiguous
-            renames.append(Rename(removed.method, removed.path, removed.prop, candidates[0]))
+        for added in changes:
+            same_endpoint = (added.method, added.path) == (removed.method, removed.path)
+            if added.kind != NEW_REQUIRED_PROPERTY or not same_endpoint:
+                continue
+            endpoint = (removed.method, removed.path)
+            if (removed.prop, added.prop) in approved:
+                reasons = removed.rename_reasons if removed.partner == added.prop else ()
+                renames.append(Rename(*endpoint, removed.prop, added.prop, True, reasons))
+            elif (
+                removed.prop not in approved_old
+                and removed.rename == CONFIRMED
+                and removed.partner == added.prop
+            ):
+                renames.append(Rename(*endpoint, removed.prop, added.prop))
     return renames
+
+
+def unmatched_approvals(
+    changes: Iterable[Change], approved: Iterable[tuple[str, str]]
+) -> list[tuple[str, str]]:
+    """Approved renames that match no endpoint, for example because of a typo."""
+    changes = list(changes)
+    return [
+        (old, new)
+        for old, new in approved
+        if not any(r.old == old and r.new == new for r in find_renames(changes, [(old, new)]))
+    ]
 
 
 def _read_lines(file: Path) -> list[str]:
@@ -113,11 +142,12 @@ def rename_usages(
     exclude: Iterable[str] = (),
     *,
     request_functions: Iterable[str] = (),
+    approved: Iterable[tuple[str, str]] = (),
 ) -> list[tuple[Rename, Usage]]:
     """Every line that uses a renamed property, paired with its rename."""
     found: list[tuple[Rename, Usage]] = []
     request_functions = tuple(request_functions)
-    for rename in find_renames(changes):
+    for rename in find_renames(changes, approved):
         removed = Change(rename.method, rename.path, REMOVED_PROPERTY, rename.old)
         usages = find_usages(root, removed, exclude, request_functions=request_functions)
         found.extend((rename, usage) for usage in usages)
@@ -131,16 +161,20 @@ def plan_fixes(
     min_confidence: str = HIGH,
     *,
     request_functions: Iterable[str] = (),
+    approved: Iterable[tuple[str, str]] = (),
 ) -> list[Edit]:
     """Work out which lines to change to fix renamed request properties.
 
-    Only lines found with at least `min_confidence` are changed.
+    Only lines found with at least `min_confidence` are changed, and only for renames
+    apimend confirmed or the developer `approved` (see `find_renames`).
     """
     # (file, line) -> list of (start byte, end byte, replacement text)
     replacements: dict[tuple[Path, int], list[tuple[int, int, str]]] = {}
     endpoints: dict[tuple[Path, int], tuple[str, str]] = {}  # which request each line belongs to
     by_rename: dict[Rename, dict[Path, set[int]]] = {}
-    for rename, usage in rename_usages(changes, root, exclude, request_functions=request_functions):
+    for rename, usage in rename_usages(
+        changes, root, exclude, request_functions=request_functions, approved=approved
+    ):
         if confidence_rank(usage.confidence) < confidence_rank(min_confidence):
             continue  # not sure enough: leave the line for a person to review
         lines_by_file = by_rename.setdefault(rename, {})
