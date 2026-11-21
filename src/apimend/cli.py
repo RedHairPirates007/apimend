@@ -19,6 +19,7 @@ import sys
 from pathlib import Path
 
 from apimend import __version__
+from apimend.config import ConfigError, request_functions
 from apimend.fix import FixError, apply_and_verify, plan_fixes, rename_usages, render_diff
 from apimend.output import (
     change_json,
@@ -135,6 +136,11 @@ def cmd_scan(args: argparse.Namespace) -> int:
         return fail(args, str(exc))
     if not Path(args.path).is_dir():
         return fail(args, f"{args.path} is not a folder")
+    try:
+        args.functions = [*args.request_function, *request_functions(args.path)]
+    except ConfigError as exc:
+        return fail(args, str(exc))
+    args.out.setdefault("inputs", {})["request_functions"] = args.functions
 
     changes = find_changes(old, new)
     out.update(
@@ -160,7 +166,7 @@ def cmd_scan(args: argparse.Namespace) -> int:
         print(f"\n{change.describe()}")
         if change.hint:
             print(f"  hint: {change.hint}")
-        usages = find_usages(args.path, change, args.exclude)
+        usages = find_usages(args.path, change, args.exclude, request_functions=args.functions)
         shown = [u for u in usages if confidence_rank(u.confidence) >= threshold]
         hidden.update((u.file, u.line) for u in usages if u not in shown)
         out["changes"].append(
@@ -220,6 +226,11 @@ def cmd_fix(args: argparse.Namespace) -> int:
         return fail(args, str(exc))
     if not Path(args.path).is_dir():
         return fail(args, f"{args.path} is not a folder")
+    try:
+        args.functions = [*args.request_function, *request_functions(args.path)]
+    except ConfigError as exc:
+        return fail(args, str(exc))
+    args.out.setdefault("inputs", {})["request_functions"] = args.functions
 
     changes = find_changes(old, new)
     out.update(
@@ -240,11 +251,19 @@ def cmd_fix(args: argparse.Namespace) -> int:
     if unreadable:
         print_unreadable(unreadable)
         print()
-    edits = plan_fixes(changes, args.path, args.exclude, args.min_confidence)
+    edits = plan_fixes(
+        changes,
+        args.path,
+        args.exclude,
+        args.min_confidence,
+        request_functions=args.functions,
+    )
     threshold = confidence_rank(args.min_confidence)
     skipped = [
         usage
-        for _, usage in rename_usages(changes, args.path, args.exclude)
+        for _, usage in rename_usages(
+            changes, args.path, args.exclude, request_functions=args.functions
+        )
         if confidence_rank(usage.confidence) < threshold
     ]
     out.update(edits=[edit_json(e) for e in edits], skipped=[usage_json(u) for u in skipped])
@@ -254,7 +273,10 @@ def cmd_fix(args: argparse.Namespace) -> int:
             print_skipped(skipped, args.min_confidence)
             out["result"] = "below-confidence"
             return 1
-        if any(find_usages(args.path, change, args.exclude) for change in changes):
+        if any(
+            find_usages(args.path, change, args.exclude, request_functions=args.functions)
+            for change in changes
+        ):
             print("Your code is affected, but apimend has no automatic fix for these changes yet.")
             print(f"Run 'apimend scan {args.old} {args.new} {args.path}' to see where.")
             out["result"] = "no-automatic-fix"
@@ -280,7 +302,11 @@ def cmd_fix(args: argparse.Namespace) -> int:
         print(f"Tests will run against a mock of {args.new} on port {args.port}.")
 
     def remaining_lines() -> int:
-        found = {(u.file, u.line) for c in changes for u in find_usages(args.path, c, args.exclude)}
+        found = {
+            (u.file, u.line)
+            for c in changes
+            for u in find_usages(args.path, c, args.exclude, request_functions=args.functions)
+        }
         return len(found)
 
     # Endpoints with affected code, worked out before the fix: the tests must call each
@@ -290,7 +316,8 @@ def cmd_fix(args: argparse.Namespace) -> int:
         {
             (change.method, change.path)
             for change in changes
-            if change.kind != REMOVED_ENDPOINT and find_usages(args.path, change, args.exclude)
+            if change.kind != REMOVED_ENDPOINT
+            and find_usages(args.path, change, args.exclude, request_functions=args.functions)
         }
     )
 
@@ -445,6 +472,14 @@ def build_parser() -> argparse.ArgumentParser:
         help="only show lines found with at least this confidence (default: low, show all)",
     )
     scan.add_argument(
+        "--request-function",
+        action="append",
+        default=[],
+        metavar="NAME",
+        help="your own function that sends HTTP requests, e.g. send or api.call (can be"
+        " repeated; also read from [tool.apimend] request-functions in pyproject.toml)",
+    )
+    scan.add_argument(
         "--format",
         choices=("text", "json"),
         default="text",
@@ -484,6 +519,14 @@ def build_parser() -> argparse.ArgumentParser:
         choices=CONFIDENCE_LEVELS,
         default=HIGH,
         help="only change lines found with at least this confidence (default: high)",
+    )
+    fix.add_argument(
+        "--request-function",
+        action="append",
+        default=[],
+        metavar="NAME",
+        help="your own function that sends HTTP requests, e.g. send or api.call (can be"
+        " repeated; also read from [tool.apimend] request-functions in pyproject.toml)",
     )
     fix.add_argument(
         "--format",
