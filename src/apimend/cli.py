@@ -22,6 +22,7 @@ from apimend.scan import (
     HIGH,
     LOW,
     MEDIUM,
+    REMOVED_ENDPOINT,
     SpecError,
     Usage,
     confidence_rank,
@@ -30,7 +31,16 @@ from apimend.scan import (
     load_spec,
     unreadable_files,
 )
-from apimend.verify import FAILED, TESTS_ONLY, UNVERIFIED, VERIFIED, Report, VerifyError
+from apimend.verify import (
+    FAILED,
+    PARTIAL,
+    TESTS_ONLY,
+    UNVERIFIED,
+    VERIFIED,
+    Endpoint,
+    Report,
+    VerifyError,
+)
 
 # External tools apimend relies on, and how to install each one.
 REQUIRED_TOOLS = {
@@ -212,6 +222,17 @@ def cmd_fix(args: argparse.Namespace) -> int:
         found = {(u.file, u.line) for c in changes for u in find_usages(args.path, c, args.exclude)}
         return len(found)
 
+    # Endpoints with affected code, worked out before the fix: the tests must call each
+    # of them for the result to count as fully verified. A removed endpoint cannot be
+    # called on the new API, so it is reported by the re-scan instead.
+    affected: list[Endpoint] = sorted(
+        {
+            (change.method, change.path)
+            for change in changes
+            if change.kind != REMOVED_ENDPOINT and find_usages(args.path, change, args.exclude)
+        }
+    )
+
     try:
         report, kept = apply_and_verify(
             edits,
@@ -221,6 +242,7 @@ def cmd_fix(args: argparse.Namespace) -> int:
             use_mock=not args.no_mock,
             allow_unverified=args.allow_unverified,
             recheck=remaining_lines,
+            affected=affected,
         )
     except (FixError, VerifyError) as exc:
         print(f"Error: {exc}", file=sys.stderr)
@@ -258,10 +280,21 @@ def print_report(report: Report, spec: str) -> None:
             print(f"             {request.describe()}")
         if total > 10:
             print(f"             ... and {total - 10} more")
+    if report.mock_used and report.affected:
+        untested = report.untested_affected
+        if untested:
+            names = ", ".join(f"{method} {path}" for method, path in untested)
+            print(f"  [missing] Coverage: your tests never called {names}")
+        else:
+            names = ", ".join(f"{method} {path}" for method, path in report.affected)
+            print(f"  [passed] Coverage: your tests called every affected endpoint ({names})")
     if report.remaining:
-        print(f"  [note] Re-scan: {report.remaining} affected line(s) remain for you to review")
+        print(
+            f"  [incomplete] Re-scan: {report.remaining} affected line(s) remain"
+            " with the fix applied, for you to review"
+        )
     else:
-        print("  [passed] Re-scan: no affected code remains")
+        print("  [passed] Re-scan: no affected code remains with the fix applied")
     print("  [not checked] Live API behaviour: authentication, rate limits, real data and errors")
 
 
@@ -272,6 +305,8 @@ def print_outcome(report: Report, kept: bool) -> int:
         print("\nVERIFIED against the new spec: the fix has been kept.")
     elif verdict == TESTS_ONLY:
         print("\nTESTS PASSED (requests not checked against the spec): the fix has been kept.")
+    elif verdict == PARTIAL:
+        return print_partial(report, kept)
     elif verdict == UNVERIFIED and kept:
         print("\nUNVERIFIED: kept anyway because --allow-unverified was used.")
     elif verdict == UNVERIFIED:
@@ -289,6 +324,28 @@ def print_outcome(report: Report, kept: bool) -> int:
         return 1
     print("Review the change with 'git diff' before committing it.")
     return 0
+
+
+def print_partial(report: Report, kept: bool) -> int:
+    """Explain a partial verification. Always exit code 1: work remains."""
+    untested = ", ".join(f"{method} {path}" for method, path in report.untested_changed)
+    if not kept:
+        print(f"\nPARTIALLY VERIFIED: your tests never called {untested}, which the fix changes,")
+        print("so there is no evidence the change is right. The fix was undone.")
+        print("Add a test that calls it, or re-run with --allow-unverified to keep the fix.")
+        return 1
+    if untested:
+        print("\nPARTIALLY VERIFIED: kept anyway because --allow-unverified was used,")
+        print(f"although your tests never called {untested}, which the fix changes.")
+    else:
+        print("\nPARTIALLY VERIFIED: every request the fix changed was tested and matched")
+        print("the new spec, so the fix has been kept. It is not complete yet:")
+    if report.remaining:
+        print(f"  - {report.remaining} affected line(s) remain: run 'apimend scan' to see them")
+    for method, path in report.untested_affected:
+        print(f"  - your tests never called {method} {path}")
+    print("Review the change with 'git diff' before committing it.")
+    return 1
 
 
 def build_parser() -> argparse.ArgumentParser:

@@ -237,7 +237,8 @@ Verification report
   [passed] Contract: 2 request(s) reached the mock, all matched the spec
              GET /menu -> 200: matches the new spec
              POST /orders -> 201: matches the new spec
-  [passed] Re-scan: no affected code remains
+  [passed] Coverage: your tests called every affected endpoint (POST /orders)
+  [passed] Re-scan: no affected code remains with the fix applied
   [not checked] Live API behaviour: authentication, rate limits, real data and errors
 
 VERIFIED against the new spec: the fix has been kept.
@@ -261,8 +262,8 @@ Review the change with 'git diff' before committing it.
   line endings and non-English text are preserved.
 - If the tests fail, a setup problem occurs (busy port, Prism missing), or you press
   <kbd>Ctrl</kbd>+<kbd>C</kbd>, every file is restored byte for byte.
-- Exit codes: `0` fix kept (or nothing to fix), `1` preview only, or the fix was undone,
-  `2` could not run.
+- Exit codes: `0` the fix is verified and complete (or nothing to fix), `1` preview only,
+  the fix was undone, or it is only partially verified, `2` could not run.
 
 **The verification report** lists exactly what was checked:
 
@@ -270,12 +271,14 @@ Review the change with 'git diff' before committing it.
 |---|---|
 | Tests | Your test command succeeds |
 | Contract | Your tests sent at least one request to the mock, and **every** request matched the new spec |
-| Re-scan | No affected code remains after the fix |
+| Coverage | Your tests called **every** endpoint with affected code (for example `POST /orders`) |
+| Re-scan | No affected code remains with the fix applied |
 | Live API behaviour | **Never checked** — authentication, rate limits, real data and errors can differ |
 
 | Result | Meaning | Fix kept? |
 |---|---|:-:|
-| `VERIFIED` | Tests passed and every request matched the new spec | ✅ |
+| `VERIFIED` | Tests passed, every request matched the new spec, every affected endpoint was called, and no affected code remains | ✅ |
+| `PARTIALLY VERIFIED` | What was tested is correct, but an affected endpoint was never called, or affected code remains | ✅ if every request the fix **changed** was tested, otherwise ❌ (✅ with `--allow-unverified`) |
 | `TESTS PASSED` | Tests passed; requests were not checked (`--no-mock`) | ✅ |
 | `UNVERIFIED` | Tests passed but never called the API | ❌ (✅ with `--allow-unverified`) |
 | `NOT VERIFIED` | Tests failed, or a request did not match the new spec | ❌ |
@@ -286,9 +289,11 @@ Review the change with 'git diff' before committing it.
 > unambiguous.
 
 > [!WARNING]
-> **What `VERIFIED` means:** your tests passed, and every request they sent matched the new
-> spec. It does **not** prove the fix works against the live provider — authentication, rate
-> limits, real error responses and data can differ from what the spec describes.
+> **What `VERIFIED` means:** your tests passed, every request they sent matched the new spec,
+> they called every endpoint with affected code, and no affected code remains. It does **not**
+> prove the fix works against the live provider — authentication, rate limits, real error
+> responses and data can differ from what the spec describes. Coverage is checked per
+> endpoint: if two places in your code call the same endpoint, one test call counts for both.
 
 ## How it works
 
@@ -399,9 +404,10 @@ apimend/
       dictionaries being reported, and missing properties being hidden)
 - [x] Execution-order-aware tracking (only data set before a request counts), and files that
       cannot be analysed are reported instead of skipped
+- [x] Honest verification verdicts: `VERIFIED` needs every affected endpoint called and nothing
+      left to fix; otherwise `PARTIALLY VERIFIED`
 - [ ] Repair safety (proven / probable / uncertain) and stricter rename detection (types,
       enums, formats)
-- [ ] Honest verification verdicts, including partial verification and untested endpoints
 - [ ] A first benchmark measuring precision, recall and wrong automatic repairs
 
 **v0.3 — Better code intelligence**
