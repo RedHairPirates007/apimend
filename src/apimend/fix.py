@@ -108,13 +108,19 @@ def _key_literals(tree: ast.AST, name: str, lines: set[int]) -> list[ast.Constan
 
 
 def rename_usages(
-    changes: Iterable[Change], root: str | Path, exclude: Iterable[str] = ()
+    changes: Iterable[Change],
+    root: str | Path,
+    exclude: Iterable[str] = (),
+    *,
+    request_functions: Iterable[str] = (),
 ) -> list[tuple[Rename, Usage]]:
     """Every line that uses a renamed property, paired with its rename."""
     found: list[tuple[Rename, Usage]] = []
+    request_functions = tuple(request_functions)
     for rename in find_renames(changes):
         removed = Change(rename.method, rename.path, REMOVED_PROPERTY, rename.old)
-        found.extend((rename, usage) for usage in find_usages(root, removed, exclude))
+        usages = find_usages(root, removed, exclude, request_functions=request_functions)
+        found.extend((rename, usage) for usage in usages)
     return found
 
 
@@ -123,6 +129,8 @@ def plan_fixes(
     root: str | Path,
     exclude: Iterable[str] = (),
     min_confidence: str = HIGH,
+    *,
+    request_functions: Iterable[str] = (),
 ) -> list[Edit]:
     """Work out which lines to change to fix renamed request properties.
 
@@ -132,7 +140,7 @@ def plan_fixes(
     replacements: dict[tuple[Path, int], list[tuple[int, int, str]]] = {}
     endpoints: dict[tuple[Path, int], tuple[str, str]] = {}  # which request each line belongs to
     by_rename: dict[Rename, dict[Path, set[int]]] = {}
-    for rename, usage in rename_usages(changes, root, exclude):
+    for rename, usage in rename_usages(changes, root, exclude, request_functions=request_functions):
         if confidence_rank(usage.confidence) < confidence_rank(min_confidence):
             continue  # not sure enough: leave the line for a person to review
         lines_by_file = by_rename.setdefault(rename, {})

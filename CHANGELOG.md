@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `--request-function NAME` on `scan` and `fix`, and `request-functions` under `[tool.apimend]`
+  in `pyproject.toml`, to declare your own functions that send HTTP requests.
 - `--format json` on `scan` and `fix`: one JSON document on standard output (and nothing
   else, even on errors) with a `schema_version`, every change, every affected line with its
   confidence and reasons, files that could not be analysed, and for `fix` the proposed edits
@@ -33,6 +35,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- A call now only counts as an HTTP request when there is evidence: a known HTTP client
+  recognised through the file's imports (`requests`, `httpx`, `aiohttp`, `urllib.request`,
+  `http.client`, and their session and client objects), a wrapper in the same file proven to
+  pass its parameter into such a request, or a function you declare. Previously any call with
+  a method name and a path, such as `logger.info("POST", "/orders", {"size": 42})`, could be
+  treated as a request and changed by `fix`. Logging calls are never treated as API data.
+  Other functions given an API path are reported as `low`, with how to declare them.
 - A dictionary in the same function as a request (for example a log message) was reported,
   and could be changed by `fix`, even though it was not part of the request.
 - A newly required property was considered present when any other request in the file sent

@@ -48,7 +48,7 @@ apimend aims to close that gap.
 |---|:-:|---|
 | Compare two OpenAPI specs | ✅ Available | Specs you provide (YAML or JSON) |
 | Detect breaking changes | ✅ Available | Via [oasdiff](https://github.com/oasdiff/oasdiff) |
-| Find affected code | ✅ Available | **Python only**; request bodies and removed endpoints; each request and its body checked on its own; every line rated high / medium / low confidence |
+| Find affected code | ✅ Available | **Python only**; request bodies and removed endpoints; only calls proven to be HTTP requests count; each request and its body checked on its own; every line rated high / medium / low confidence |
 | Detect renamed properties | 🟡 Limited | One removed + one new required property on the same endpoint |
 | Fix code automatically | 🟡 Limited | Renamed request properties only |
 | Verify fixes | ✅ Available | Records every request your tests send to a **mock generated from the new spec** and checks it matches — not the live API |
@@ -184,8 +184,28 @@ apimend traces a request body through:
 | A function in the same file that returns a dictionary | `post("/orders", json=make_body(size))` |
 | JSON encoding | `Request(url, data=json.dumps(body).encode())` |
 
-It understands `requests`, `httpx`, `aiohttp`, `urllib` and your own wrapper functions,
-including URLs built with f-strings, `+` or a constant.
+**What counts as a request.** A call only counts as a request when there is evidence:
+
+| Evidence | Example |
+|---|---|
+| A known HTTP client, recognised through your imports | `requests`, `httpx`, `aiohttp`, `urllib.request`, `http.client` |
+| A client object | `s = requests.Session()`, `with httpx.Client() as c`, `self.session = ...`, `client: httpx.Client` |
+| A wrapper in the same file that passes its own parameter into a real request's URL | `def _request(method, path, body): ... urllib.request.Request(BASE + path, ...)` |
+| A function you declare | `--request-function send`, or in `pyproject.toml` (below) |
+
+Anything else is **not** a request: `logger.info("POST", "/orders", {...})` is never reported
+or changed. If an unrecognised function is given an API path, for example
+`track("POST", "/orders", body)`, its lines are reported as `low` with a note telling you how
+to declare it, so a real request is never silently missed. URLs built with f-strings, `+` or
+a constant are understood.
+
+Declare your own request functions, for example wrappers defined in another file:
+
+```toml
+# pyproject.toml (apimend reads the nearest one in or above the scanned folder)
+[tool.apimend]
+request-functions = ["send", "api.call"]
+```
 
 **Order matters.** Only data set *before* a request is part of it: a key added after
 `post(...)` was never sent, so it is never reported or changed. A key added only in some
@@ -195,7 +215,7 @@ cases (inside an `if`, or later in a retry loop) may be sent, so it is `medium` 
 |---|---|
 | `high` | **Proven:** part of what a request to the changed endpoint sends, with the same HTTP method and the exact path |
 | `medium` | **Probable:** it belongs to a request to the endpoint, but the HTTP method could not be determined, or the path only partly matches (paths with `{parameters}`) |
-| `low` | **Uncertain:** apimend could not connect it to the request, for example because the body comes from a function parameter or is changed with `update()` |
+| `low` | **Uncertain:** apimend could not connect it to a request, for example because the body comes from a function parameter, is changed with `update()`, or is passed to a function apimend does not recognise |
 
 Requests that use a **different HTTP method** (for example `GET /orders` when `POST /orders`
 changed) are a different operation and are not reported. When something cannot be checked,

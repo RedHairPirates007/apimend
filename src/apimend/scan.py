@@ -27,7 +27,7 @@ from pathlib import Path, PurePosixPath
 
 import yaml
 
-from apimend.callsites import NO_BODY, TRACED, CallSite, analyse
+from apimend.callsites import NO_BODY, TRACED, Analysis, CallSite, analyse
 from apimend.safety import LINKED_FOLDER, unsafe_reason
 
 HTTP_METHODS = ("get", "put", "post", "delete", "patch", "head", "options", "trace")
@@ -259,14 +259,28 @@ def _endpoint_checks(call: CallSite, change: Change) -> list[str]:
     return problems
 
 
-def _rate_file(source: str, change: Change) -> list[tuple[int, Grade]]:
+def _unknown_reason(analysis: Analysis, line: int, change: Change) -> str:
+    """Why a mention of the path on `line` could not be connected to a request."""
+    for call in analysis.unknown_calls:
+        if call.line == line and any(_path_matches(p, change.path) for p in call.paths):
+            name = call.function.rsplit(".", 1)[-1]
+            return (
+                f"{change.path} is passed to {call.function}(), which apimend does not"
+                " recognise as an HTTP client; if it sends requests, add it with"
+                f" --request-function {name}"
+            )
+    return f"mentions {change.path}, but apimend found no request that uses it"
+
+
+def _rate_file(
+    source: str, change: Change, request_functions: Iterable[str] = ()
+) -> list[tuple[int, Grade]]:
     """Every affected line in one file, with its confidence. Raises SyntaxError."""
-    analysis = analyse(source)
+    analysis = analyse(source, request_functions)
     calls = [c for c in analysis.calls if any(_path_matches(t, change.path) for t in c.paths)]
     loose = [line for line, text in analysis.loose_strings if _path_matches(text, change.path)]
     # A request with another HTTP method goes to a different operation: not affected.
     relevant = [c for c in calls if not c.method or c.method == change.method]
-    unclear = ("apimend found no request that uses it, so it cannot check what is sent",)
     found: list[tuple[int, Grade]] = []
 
     if change.kind == REMOVED_PROPERTY:
@@ -278,11 +292,18 @@ def _rate_file(source: str, change: Change) -> list[tuple[int, Grade]]:
                 found.append((line, _grade(problems)))
         # Only when a request's body cannot be fully traced can other dictionaries in
         # the file still reach it. Then report them as uncertain, never as proven.
-        if loose or any(c.body not in (TRACED, NO_BODY) for c in relevant):
-            reason = (
-                f"'{change.prop}' is not in any request body apimend could trace, but a "
-                f"request to {change.path} here sends data apimend cannot follow"
-            )
+        untraced = any(c.body not in (TRACED, NO_BODY) for c in relevant)
+        if loose or untraced:
+            if untraced:
+                reason = (
+                    f"'{change.prop}' is not in any request body apimend could trace, but a "
+                    f"request to {change.path} here sends data apimend cannot follow"
+                )
+            else:
+                reason = (
+                    f"'{change.prop}' is not in any request apimend recognises, but this file"
+                    f" also mentions {change.path} ({_unknown_reason(analysis, loose[0], change)})"
+                )
             found += [
                 (line, (LOW, (reason,))) for line, key in analysis.loose_keys if key == change.prop
             ]
@@ -305,23 +326,31 @@ def _rate_file(source: str, change: Change) -> list[tuple[int, Grade]]:
                     found.append((call.line, (LOW, tuple(problems))))
                     continue
             found.append((call.line, _grade(problems)))
-        found += [(line, (LOW, (f"mentions {change.path}, but {unclear[0]}",))) for line in loose]
+        found += [(line, (LOW, (_unknown_reason(analysis, line, change),))) for line in loose]
     return found
 
 
-def find_usages(root: str | Path, change: Change, exclude: Iterable[str] = ()) -> list[Usage]:
+def find_usages(
+    root: str | Path,
+    change: Change,
+    exclude: Iterable[str] = (),
+    *,
+    request_functions: Iterable[str] = (),
+) -> list[Usage]:
     """Find lines in Python files under `root` that are affected by `change`.
 
     Each request in each file is checked on its own, so a property sent by one request
     never makes another request look correct. Files matching any of the `exclude` glob
     patterns (for example "tests/*") are skipped. Each line found gets a confidence
-    level explaining how sure apimend is that it is affected.
+    level explaining how sure apimend is that it is affected. `request_functions`
+    names your own functions that send requests (see `apimend.callsites`).
     """
+    request_functions = tuple(request_functions)
     usages: list[Usage] = []
     for file in _python_files(Path(root), exclude):
         try:
             source = file.read_text(encoding="utf-8")
-            found = _rate_file(source, change)
+            found = _rate_file(source, change, request_functions)
         except (OSError, UnicodeDecodeError, SyntaxError):
             continue  # skip files we cannot read or parse
         best: dict[int, Grade] = {}

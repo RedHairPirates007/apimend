@@ -2,6 +2,7 @@ import shlex
 import shutil
 import socket
 import sys
+from functools import partial
 from pathlib import Path
 
 import pytest
@@ -16,6 +17,12 @@ RENAME_CHANGES = [
     Change("POST", "/orders", REMOVED_PROPERTY, "size", "renamed"),
     Change("POST", "/orders", NEW_REQUIRED_PROPERTY, "pizza_size", "new name"),
 ]
+
+
+# Functions the tests use as their own request wrappers, declared the way a project
+# declares them (--request-function, or request-functions in pyproject.toml).
+DECLARED = ("post", "send")
+plan_declared = partial(plan_fixes, request_functions=DECLARED)
 
 
 @pytest.fixture
@@ -65,7 +72,7 @@ def test_keeps_quotes_line_endings_and_unicode(tmp_path):
     client = tmp_path / "client.py"
     original = "body = {'note': 'café', 'size': 1}\r\nbody['size'] = 2\r\npost('/orders', body)\r\n"
     client.write_bytes(original.encode("utf-8"))
-    edits = plan_fixes(RENAME_CHANGES, tmp_path)
+    edits = plan_declared(RENAME_CHANGES, tmp_path)
     originals = apply_edits(edits, tmp_path)
     expected = (
         "body = {'note': 'café', 'pizza_size': 1}\r\nbody['pizza_size'] = 2\r\n"
@@ -78,7 +85,7 @@ def test_keeps_quotes_line_endings_and_unicode(tmp_path):
 
 def test_does_not_touch_size_used_as_a_value(tmp_path):
     (tmp_path / "client.py").write_text('post("/orders", {"label": "size"})\n')
-    assert plan_fixes(RENAME_CHANGES, tmp_path) == []
+    assert plan_declared(RENAME_CHANGES, tmp_path) == []
 
 
 def test_preview_does_not_change_files(lab, capsys):
@@ -118,7 +125,7 @@ def test_setup_problems_change_nothing(lab, capsys):
 
 def test_preview_marks_a_missing_final_newline_like_git(tmp_path):
     (tmp_path / "client.py").write_text('post("/orders", {"size": 1})')  # no final newline
-    diff = render_diff(plan_fixes(RENAME_CHANGES, tmp_path))
+    diff = render_diff(plan_declared(RENAME_CHANGES, tmp_path))
     assert diff.splitlines()[-4:] == [
         '-post("/orders", {"size": 1})',
         "\\ No newline at end of file",
@@ -156,8 +163,8 @@ UNCERTAIN_CLIENT = (
 
 def test_lines_below_the_minimum_confidence_are_not_changed(tmp_path):
     (tmp_path / "client.py").write_text(PROBABLE_CLIENT)
-    assert plan_fixes(RENAME_CHANGES, tmp_path) == []
-    [edit] = plan_fixes(RENAME_CHANGES, tmp_path, min_confidence="medium")
+    assert plan_declared(RENAME_CHANGES, tmp_path) == []
+    [edit] = plan_declared(RENAME_CHANGES, tmp_path, min_confidence="medium")
     assert edit.after.strip() == 'return send("/orders", {"pizza_size": size})'
 
 
@@ -168,13 +175,13 @@ def test_unrelated_dictionaries_are_never_changed(tmp_path):
         '    log({"size": size})\n'
     )
     (tmp_path / "client.py").write_text(source)
-    [edit] = plan_fixes(RENAME_CHANGES, tmp_path, min_confidence="low")
+    [edit] = plan_declared(RENAME_CHANGES, tmp_path, min_confidence="low")
     assert edit.line == 2  # the request body only, not the log call
 
 
 def test_fix_lists_lines_it_is_not_sure_enough_to_change(lab, capsys):
     (lab / "app" / "helpers.py").write_text(PROBABLE_CLIENT)
-    assert main(fix_args(lab)) == 1  # preview only
+    assert main(fix_args(lab, "--request-function", "send")) == 1  # preview only
     out = capsys.readouterr().out
     assert "Proposed fix (1 line(s), high confidence or above):" in out
     assert "Not changed, because the confidence is below high" in out

@@ -1,3 +1,4 @@
+from functools import partial
 from pathlib import Path
 
 import pytest
@@ -21,6 +22,16 @@ from apimend.scan import (
 
 LAB = Path(__file__).resolve().parent.parent / "lab" / "pizza-api"
 V1, V2, APP = LAB / "v1.yaml", LAB / "v2.yaml", LAB / "app"
+
+# Functions the tests below use as their own request wrappers, declared the way a project
+# declares them (--request-function, or request-functions in pyproject.toml).
+DECLARED = ("post", "send", "_request")
+find_declared = partial(find_usages, request_functions=DECLARED)
+
+
+def write(folder, source, name="client.py"):
+    """Write a test file. `import requests` goes at the end, so line numbers stay as written."""
+    (folder / name).write_text(source + "\nimport requests\n")
 
 
 def make_spec(properties, required, path="/orders", method="post"):
@@ -82,7 +93,7 @@ def test_ignores_comments_and_files_that_do_not_call_the_endpoint(tmp_path):
         "def order(size):\n"
         '    return post("/orders", {"size": size})\n'
     )
-    usages = find_usages(tmp_path, Change("POST", "/orders", REMOVED_PROPERTY, "size"))
+    usages = find_declared(tmp_path, Change("POST", "/orders", REMOVED_PROPERTY, "size"))
     assert [(u.file.name, u.line) for u in usages] == [("client.py", 3)]
 
 
@@ -91,14 +102,14 @@ def test_exclude_patterns_skip_matching_files(tmp_path):
     (tmp_path / "tests" / "test_client.py").write_text('post("/orders", {"size": 1})\n')
     (tmp_path / "client.py").write_text('post("/orders", {"size": 1})\n')
     change = Change("POST", "/orders", REMOVED_PROPERTY, "size")
-    assert len(find_usages(tmp_path, change)) == 2
-    usages = find_usages(tmp_path, change, exclude=["tests/*"])
+    assert len(find_declared(tmp_path, change)) == 2
+    usages = find_declared(tmp_path, change, exclude=["tests/*"])
     assert [u.file.name for u in usages] == ["client.py"]
 
 
 def test_skips_files_with_syntax_errors(tmp_path):
     (tmp_path / "broken.py").write_text('post("/orders", {"size": 1}\n')
-    assert find_usages(tmp_path, Change("POST", "/orders", REMOVED_PROPERTY, "size")) == []
+    assert find_declared(tmp_path, Change("POST", "/orders", REMOVED_PROPERTY, "size")) == []
 
 
 def test_load_spec_rejects_files_that_are_not_specs(tmp_path):
@@ -139,7 +150,7 @@ def test_files_already_sending_a_new_required_property_are_not_flagged(tmp_path)
     (tmp_path / "old.py").write_text('post("/orders", {"size": 1})\n')
     (tmp_path / "new.py").write_text('post("/orders", {"pizza_size": 1})\n')
     change = Change("POST", "/orders", NEW_REQUIRED_PROPERTY, "pizza_size")
-    assert [u.file.name for u in find_usages(tmp_path, change)] == ["old.py"]
+    assert [u.file.name for u in find_declared(tmp_path, change)] == ["old.py"]
 
 
 # --- confidence levels and the call-site model ---------------------------------
@@ -150,8 +161,8 @@ SIZE_REQUIRED = Change("POST", "/orders", NEW_REQUIRED_PROPERTY, "pizza_size")
 
 def affected(tmp_path, source, change, name="client.py"):
     """Scan one file and return {line: confidence}."""
-    (tmp_path / name).write_text(source)
-    return {u.line: u.confidence for u in find_usages(tmp_path, change) if u.file.name == name}
+    write(tmp_path, source, name)
+    return {u.line: u.confidence for u in find_declared(tmp_path, change) if u.file.name == name}
 
 
 def test_confidence_levels_are_ordered():
@@ -231,8 +242,8 @@ def test_a_body_apimend_cannot_trace_makes_other_dictionaries_uncertain(tmp_path
         "def send(body):\n"
         '    return requests.post("/orders", json=body)\n'
     )
-    (tmp_path / "client.py").write_text(source)
-    [usage] = find_usages(tmp_path, SIZE_REMOVED)
+    write(tmp_path, source)
+    [usage] = find_declared(tmp_path, SIZE_REMOVED)
     assert (usage.line, usage.confidence) == (3, LOW)
     assert "sends data apimend cannot follow" in usage.reasons[0]
 
@@ -280,8 +291,8 @@ def test_a_request_that_may_send_more_is_uncertain(tmp_path):
         "    body.update(extra)\n"
         '    return requests.post("/orders", json=body)\n'
     )
-    (tmp_path / "client.py").write_text(source)
-    [usage] = find_usages(tmp_path, SIZE_REQUIRED)
+    write(tmp_path, source)
+    [usage] = find_declared(tmp_path, SIZE_REQUIRED)
     assert (usage.line, usage.confidence) == (4, LOW)
     assert "is changed with .update()" in usage.reasons[0]
 
@@ -301,8 +312,8 @@ def test_http_method_is_read_from_wrapper_calls(tmp_path):
 
 def test_an_unknown_http_method_is_probable_not_proven(tmp_path):
     source = 'URL = BASE + "/orders"\ndef order(size):\n    return send(URL, {"size": size})\n'
-    (tmp_path / "client.py").write_text(source)
-    [usage] = find_usages(tmp_path, SIZE_REMOVED)
+    write(tmp_path, source)
+    [usage] = find_declared(tmp_path, SIZE_REMOVED)
     assert (usage.line, usage.confidence) == (3, MEDIUM)
     assert usage.reasons == ("apimend could not tell which HTTP method this request uses",)
 
@@ -311,16 +322,16 @@ def test_paths_with_parameters_only_partly_match(tmp_path):
     source = (
         'import requests\ndef show(order_id):\n    return requests.get(f"/orders/{order_id}")\n'
     )
-    (tmp_path / "client.py").write_text(source)
-    [usage] = find_usages(tmp_path, Change("GET", "/orders/{id}", REMOVED_ENDPOINT))
+    write(tmp_path, source)
+    [usage] = find_declared(tmp_path, Change("GET", "/orders/{id}", REMOVED_ENDPOINT))
     assert usage.confidence == MEDIUM
     assert usage.reasons == ("the path only partly matches /orders/{id}",)
 
 
 def test_a_path_no_request_uses_is_reported_not_ignored(tmp_path):
     source = 'ORDERS = "/orders"\ndef order(client):\n    return client.post(config.ORDERS)\n'
-    (tmp_path / "client.py").write_text(source)
-    [usage] = find_usages(tmp_path, Change("POST", "/orders", REMOVED_ENDPOINT))
+    write(tmp_path, source)
+    [usage] = find_declared(tmp_path, Change("POST", "/orders", REMOVED_ENDPOINT))
     assert (usage.line, usage.confidence) == (1, LOW)
     assert "apimend found no request that uses it" in usage.reasons[0]
 
@@ -370,7 +381,7 @@ def test_scan_rejects_an_unknown_confidence_level(capsys):
 CLIENT_STYLES = """\
 import json
 import urllib.request
-
+import aiohttp, httpx, requests
 BASE = "https://api.example.com"
 
 
@@ -380,7 +391,7 @@ def with_urllib(size):
     return urllib.request.urlopen(req)
 
 
-def with_httpx(client, size):
+def with_httpx(client: httpx.Client, size):
     return client.post(url=f"{BASE}/orders", json={"size": size})
 
 
@@ -388,7 +399,7 @@ def with_requests(size):
     return requests.request("POST", BASE + "/orders", json={"size": size})
 
 
-async def with_aiohttp(session, size):
+async def with_aiohttp(session: aiohttp.ClientSession, size):
     async with session.post(BASE + "/orders", json={"size": size}) as response:
         return await response.json()
 """
@@ -449,11 +460,11 @@ def test_a_key_added_only_in_some_cases_is_probable(tmp_path):
         '        body["size"] = size\n'
         '    return requests.post("/orders", json=body)\n'
     )
-    (tmp_path / "client.py").write_text(source)
-    [usage] = find_usages(tmp_path, SIZE_REMOVED)
+    write(tmp_path, source)
+    [usage] = find_declared(tmp_path, SIZE_REMOVED)
     assert (usage.line, usage.confidence) == (4, MEDIUM)
     assert usage.reasons == ("'size' is only added in some cases",)
-    [usage] = find_usages(tmp_path, Change("POST", "/orders", NEW_REQUIRED_PROPERTY, "size"))
+    [usage] = find_declared(tmp_path, Change("POST", "/orders", NEW_REQUIRED_PROPERTY, "size"))
     assert (usage.line, usage.confidence) == (5, MEDIUM)
     assert usage.reasons == ("this request sends 'size' only in some cases",)
 
@@ -465,8 +476,8 @@ def test_a_body_assigned_only_in_some_cases_is_not_traced(tmp_path):
         '        body = {"size": size}\n'
         '    return requests.post("/orders", json=body)\n'
     )
-    (tmp_path / "client.py").write_text(source)
-    [usage] = find_usages(tmp_path, SIZE_REMOVED)
+    write(tmp_path, source)
+    [usage] = find_declared(tmp_path, SIZE_REMOVED)
     assert usage.confidence == LOW  # reported, never changed automatically
 
 
