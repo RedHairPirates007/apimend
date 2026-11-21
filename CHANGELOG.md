@@ -15,6 +15,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `--allow-unverified` keeps a fix even when the tests never called the mock API.
 - Every affected line found by `scan` and `fix` has a confidence level: high (proven),
   medium (probable) or low (uncertain), with the reasons when it is not high.
+- A new verdict, `PARTIALLY VERIFIED`: what was tested is correct, but an affected endpoint
+  was never called by the tests, or affected code remains. The verification report has a new
+  **Coverage** line listing endpoints the tests never called.
 - `scan` and `fix` list every Python file they could not analyse (for example, because of a
   syntax error) with the reason, instead of skipping it silently.
 - Request-level analysis (`apimend.callsites`): apimend finds each request in the code, its
@@ -36,6 +39,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   later in a retry loop) are `medium` at most.
 
 ### Changed
+
+- `VERIFIED` now also requires that the tests called every endpoint with affected code and
+  that no affected code remains. Before, a fix could be reported as `VERIFIED` even when the
+  tests never called the endpoint it changed, or when affected lines were left. A fix whose
+  changed requests were never tested is undone (unless `--allow-unverified` is used), and a
+  partial result exits with code `1`.
 
 - A fix is now kept only when the evidence supports it. Tests that pass without calling the
   API give `UNVERIFIED`, and requests that do not match the new spec give `NOT VERIFIED`; in
