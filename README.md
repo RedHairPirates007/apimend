@@ -52,6 +52,7 @@ apimend aims to close that gap.
 | Detect renamed properties | 🟡 Limited | One removed + one new required property on the same endpoint |
 | Fix code automatically | 🟡 Limited | Renamed request properties only |
 | Verify fixes | ✅ Available | Records every request your tests send to a **mock generated from the new spec** and checks it matches — not the live API |
+| JSON output for scripts and agents | ✅ Available | `scan` and `fix` with `--format json` |
 | JavaScript / TypeScript and other languages | 🗺️ Roadmap | |
 | Response-change detection | 🗺️ Roadmap | |
 | Automatic pull requests | 🗺️ Roadmap | |
@@ -260,6 +261,9 @@ Review the change with 'git diff' before committing it.
   listed with the reason, for you to review (or to include with `--min-confidence medium`).
 - Only the exact characters that need changing are edited — quote style, comments, spacing,
   line endings and non-English text are preserved.
+- apimend only changes ordinary files inside the folder you give it. Symbolic links are never
+  followed (they are listed as not analysed), every file is checked again right before it is
+  written, and if any file is unsafe nothing is changed.
 - If the tests fail, a setup problem occurs (busy port, Prism missing), or you press
   <kbd>Ctrl</kbd>+<kbd>C</kbd>, every file is restored byte for byte.
 - Exit codes: `0` the fix is verified and complete (or nothing to fix), `1` preview only,
@@ -294,6 +298,71 @@ Review the change with 'git diff' before committing it.
 > prove the fix works against the live provider — authentication, rate limits, real error
 > responses and data can differ from what the spec describes. Coverage is checked per
 > endpoint: if two places in your code call the same endpoint, one test call counts for both.
+
+### JSON output for scripts and AI agents
+
+Add `--format json` to `scan` or `fix` to get one JSON document on standard output instead of
+text, for CI jobs, scripts and AI agents. Standard output then contains **only** the JSON, even
+when something goes wrong; error messages are also printed to standard error. The exit codes do
+not change.
+
+```bash
+apimend scan lab/pizza-api/v1.yaml lab/pizza-api/v2.yaml lab/pizza-api --format json
+```
+
+```json
+{
+  "schema_version": 1,
+  "tool": {"name": "apimend", "version": "0.1.1"},
+  "command": "scan",
+  "inputs": {"old_spec": "lab/pizza-api/v1.yaml", "new_spec": "lab/pizza-api/v2.yaml", "...": "..."},
+  "result": "affected",
+  "changes": [
+    {
+      "kind": "removed-property",
+      "method": "POST",
+      "path": "/orders",
+      "property": "size",
+      "description": "POST /orders: request property 'size' was removed",
+      "hint": "looks like it was renamed to 'pizza_size'",
+      "usages": [
+        {
+          "file": "lab/pizza-api/app/pizza_client.py",
+          "line": 34,
+          "code": "return _request(\"POST\", \"/orders\", {\"pizza\": pizza, \"size\": size})",
+          "confidence": "high",
+          "reasons": []
+        }
+      ],
+      "hidden_usages": 0
+    }
+  ],
+  "unreadable_files": [],
+  "summary": {"affected_lines": 1, "affected_files": 1, "by_confidence": {"high": 1, "medium": 0, "low": 0}, "hidden_lines": 0},
+  "exit_code": 1
+}
+```
+
+(Shortened: the real output lists both changes and is indented.)
+
+Every document has `schema_version`, `tool`, `command`, `inputs`, `result` and `exit_code`.
+`schema_version` goes up whenever a field is renamed or removed.
+
+| `result` | Command | Meaning |
+|---|---|---|
+| `no-changes` | scan, fix | The specs have no breaking request changes |
+| `not-affected` | scan, fix | No affected code was found (check `unreadable_files`) |
+| `affected` | scan | Affected code was found: see `changes[].usages` |
+| `preview` | fix | `edits` lists the proposed fix; no files were changed |
+| `below-confidence` | fix | Lines were found, but none confident enough to change: see `skipped` |
+| `no-automatic-fix` | fix | Your code is affected, but apimend has no automatic fix for it yet |
+| `verified`, `partially-verified`, `tests-only`, `unverified`, `failed` | fix | The verdict; `verification` holds the full report and `files_changed` says whether the fix was kept |
+| `error` | scan, fix | apimend could not run: see `error` |
+
+For `fix`, `verification` contains every request your tests sent to the mock and whether it
+matched the new spec, the affected and changed endpoints (and which ones your tests never
+called), the number of affected lines remaining, and the last 50 lines of the test output.
+With `--no-mock` no requests are recorded, so the "never called" lists are `null` (unknown).
 
 ## How it works
 
@@ -406,6 +475,7 @@ apimend/
       cannot be analysed are reported instead of skipped
 - [x] Honest verification verdicts: `VERIFIED` needs every affected endpoint called and nothing
       left to fix; otherwise `PARTIALLY VERIFIED`
+- [x] JSON output (`--format json`) for scripts, CI and AI agents
 - [ ] Repair safety (proven / probable / uncertain) and stricter rename detection (types,
       enums, formats)
 - [ ] A first benchmark measuring precision, recall and wrong automatic repairs
@@ -423,7 +493,7 @@ apimend/
 
 **v0.5 — Production readiness**
 
-- [ ] Real-world benchmark with published results, structured JSON output, crash-safe repairs
+- [ ] Real-world benchmark with published results, crash-safe repairs
 
 **v0.6 — GitHub and CI integration**
 

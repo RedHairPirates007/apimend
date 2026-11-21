@@ -10,6 +10,9 @@ Commands:
 from __future__ import annotations
 
 import argparse
+import contextlib
+import io
+import json
 import shutil
 import subprocess
 import sys
@@ -17,6 +20,15 @@ from pathlib import Path
 
 from apimend import __version__
 from apimend.fix import FixError, apply_and_verify, plan_fixes, rename_usages, render_diff
+from apimend.output import (
+    change_json,
+    document,
+    edit_json,
+    report_json,
+    unreadable_json,
+    usage_json,
+)
+from apimend.safety import UnsafePathError
 from apimend.scan import (
     CONFIDENCE_LEVELS,
     HIGH,
@@ -108,19 +120,36 @@ def print_unreadable(files: list[tuple[Path, str]]) -> None:
         print(f"  {file}: {reason}")
 
 
+def fail(args: argparse.Namespace, message: str) -> int:
+    """Report a problem that stopped the command (exit code 2)."""
+    print(f"Error: {message}", file=sys.stderr)
+    args.out.update(result="error", error=message)
+    return 2
+
+
 def cmd_scan(args: argparse.Namespace) -> int:
+    out = args.out
     try:
         old, new = load_spec(args.old), load_spec(args.new)
     except SpecError as exc:
-        print(f"Error: {exc}", file=sys.stderr)
-        return 2
+        return fail(args, str(exc))
     if not Path(args.path).is_dir():
-        print(f"Error: {args.path} is not a folder", file=sys.stderr)
-        return 2
+        return fail(args, f"{args.path} is not a folder")
 
     changes = find_changes(old, new)
+    out.update(
+        changes=[],
+        unreadable_files=[],
+        summary={
+            "affected_lines": 0,
+            "affected_files": 0,
+            "by_confidence": dict.fromkeys(reversed(CONFIDENCE_LEVELS), 0),
+            "hidden_lines": 0,
+        },
+    )
     if not changes:
         print("No breaking request changes found. Nothing to scan for.")
+        out["result"] = "no-changes"
         return 0
 
     print(f"Scanning {args.path} for code affected by {len(changes)} breaking change(s)...")
@@ -134,6 +163,13 @@ def cmd_scan(args: argparse.Namespace) -> int:
         usages = find_usages(args.path, change, args.exclude)
         shown = [u for u in usages if confidence_rank(u.confidence) >= threshold]
         hidden.update((u.file, u.line) for u in usages if u not in shown)
+        out["changes"].append(
+            {
+                **change_json(change),
+                "usages": [usage_json(u) for u in shown],
+                "hidden_usages": len(usages) - len(shown),
+            }
+        )
         if not usages:
             print("  no affected code found")
         elif not shown:
@@ -145,9 +181,18 @@ def cmd_scan(args: argparse.Namespace) -> int:
             affected[key] = max(strongest, usage.confidence, key=confidence_rank)
 
     unreadable = unreadable_files(args.path, args.exclude)
+    out["unreadable_files"] = unreadable_json(unreadable)
     if unreadable:
         print_unreadable(unreadable)
     hidden -= affected.keys()
+    out["summary"] = {
+        "affected_lines": len(affected),
+        "affected_files": len({file for file, _ in affected}),
+        "by_confidence": {
+            level: list(affected.values()).count(level) for level in reversed(CONFIDENCE_LEVELS)
+        },
+        "hidden_lines": len(hidden),
+    }
     if hidden:
         print(
             f"\n{len(hidden)} line(s) with lower confidence were hidden"
@@ -156,7 +201,9 @@ def cmd_scan(args: argparse.Namespace) -> int:
     if not affected:
         where = " in the files apimend could analyse" if unreadable else ""
         print(f"\nYour code does not appear to be affected{where}.")
+        out["result"] = "not-affected"
         return 0
+    out["result"] = "affected"
     files = {file for file, _ in affected}
     counts = ", ".join(
         f"{list(affected.values()).count(level)} {level}" for level in reversed(CONFIDENCE_LEVELS)
@@ -166,21 +213,30 @@ def cmd_scan(args: argparse.Namespace) -> int:
 
 
 def cmd_fix(args: argparse.Namespace) -> int:
+    out = args.out
     try:
         old, new = load_spec(args.old), load_spec(args.new)
     except SpecError as exc:
-        print(f"Error: {exc}", file=sys.stderr)
-        return 2
+        return fail(args, str(exc))
     if not Path(args.path).is_dir():
-        print(f"Error: {args.path} is not a folder", file=sys.stderr)
-        return 2
+        return fail(args, f"{args.path} is not a folder")
 
     changes = find_changes(old, new)
+    out.update(
+        changes=[change_json(c) for c in changes],
+        unreadable_files=[],
+        edits=[],
+        skipped=[],
+        files_changed=False,
+        verification=None,
+    )
     if not changes:
         print("No breaking request changes found. Nothing to fix.")
+        out["result"] = "no-changes"
         return 0
 
     unreadable = unreadable_files(args.path, args.exclude)
+    out["unreadable_files"] = unreadable_json(unreadable)
     if unreadable:
         print_unreadable(unreadable)
         print()
@@ -191,17 +247,21 @@ def cmd_fix(args: argparse.Namespace) -> int:
         for _, usage in rename_usages(changes, args.path, args.exclude)
         if confidence_rank(usage.confidence) < threshold
     ]
+    out.update(edits=[edit_json(e) for e in edits], skipped=[usage_json(u) for u in skipped])
     if not edits:
         if skipped:
             print(f"apimend found lines to fix, but none with {args.min_confidence} confidence.")
             print_skipped(skipped, args.min_confidence)
+            out["result"] = "below-confidence"
             return 1
         if any(find_usages(args.path, change, args.exclude) for change in changes):
             print("Your code is affected, but apimend has no automatic fix for these changes yet.")
             print(f"Run 'apimend scan {args.old} {args.new} {args.path}' to see where.")
+            out["result"] = "no-automatic-fix"
             return 1
         where = " in the files apimend could analyse" if unreadable else ""
         print(f"Your code does not appear to be affected{where}. Nothing to fix.")
+        out["result"] = "not-affected"
         return 0
 
     print(f"Proposed fix ({len(edits)} line(s), {args.min_confidence} confidence or above):\n")
@@ -212,6 +272,7 @@ def cmd_fix(args: argparse.Namespace) -> int:
     if not args.test:
         print("Preview only: no files were changed.")
         print('To apply and verify the fix, add --test "<command that runs your tests>".')
+        out["result"] = "preview"
         return 1
 
     print(f"Applying the fix and verifying it with: {args.test}")
@@ -243,12 +304,14 @@ def cmd_fix(args: argparse.Namespace) -> int:
             allow_unverified=args.allow_unverified,
             recheck=remaining_lines,
             affected=affected,
+            root=args.path,
         )
-    except (FixError, VerifyError) as exc:
-        print(f"Error: {exc}", file=sys.stderr)
+    except (FixError, VerifyError, UnsafePathError) as exc:
+        code = fail(args, str(exc))
         print("No files were changed.", file=sys.stderr)
-        return 2
+        return code
 
+    out.update(result=report.verdict, files_changed=kept, verification=report_json(report, kept))
     print_report(report, args.new)
     return print_outcome(report, kept)
 
@@ -381,6 +444,12 @@ def build_parser() -> argparse.ArgumentParser:
         default=LOW,
         help="only show lines found with at least this confidence (default: low, show all)",
     )
+    scan.add_argument(
+        "--format",
+        choices=("text", "json"),
+        default="text",
+        help="output format: text for people, json for scripts and agents (default: text)",
+    )
     scan.set_defaults(func=cmd_scan)
 
     fix = sub.add_parser("fix", help="fix affected code and prove the fix with your tests")
@@ -416,13 +485,49 @@ def build_parser() -> argparse.ArgumentParser:
         default=HIGH,
         help="only change lines found with at least this confidence (default: high)",
     )
+    fix.add_argument(
+        "--format",
+        choices=("text", "json"),
+        default="text",
+        help="output format: text for people, json for scripts and agents (default: text)",
+    )
     fix.set_defaults(func=cmd_fix)
     return parser
 
 
+def json_inputs(args: argparse.Namespace) -> dict[str, object]:
+    """The arguments a command ran with, for the JSON document."""
+    inputs: dict[str, object] = {
+        "old_spec": args.old,
+        "new_spec": args.new,
+        "path": args.path,
+        "exclude": list(args.exclude),
+        "min_confidence": args.min_confidence,
+    }
+    if args.command == "fix":
+        inputs.update(
+            test_command=args.test,
+            mock=not args.no_mock,
+            port=args.port,
+            allow_unverified=args.allow_unverified,
+        )
+    return inputs
+
+
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
-    return args.func(args)
+    args.out = {}
+    if getattr(args, "format", "text") != "json":
+        return args.func(args)
+
+    # JSON mode: standard output carries the JSON document and nothing else. The usual
+    # text is discarded; error messages still go to standard error.
+    args.out = document(args.command, json_inputs(args))
+    with contextlib.redirect_stdout(io.StringIO()):
+        code = args.func(args)
+    args.out["exit_code"] = code
+    print(json.dumps(args.out, indent=2))
+    return code
 
 
 if __name__ == "__main__":

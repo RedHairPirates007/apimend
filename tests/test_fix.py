@@ -66,13 +66,13 @@ def test_keeps_quotes_line_endings_and_unicode(tmp_path):
     original = "body = {'note': 'café', 'size': 1}\r\nbody['size'] = 2\r\npost('/orders', body)\r\n"
     client.write_bytes(original.encode("utf-8"))
     edits = plan_fixes(RENAME_CHANGES, tmp_path)
-    originals = apply_edits(edits)
+    originals = apply_edits(edits, tmp_path)
     expected = (
         "body = {'note': 'café', 'pizza_size': 1}\r\nbody['pizza_size'] = 2\r\n"
         "post('/orders', body)\r\n"
     )
     assert client.read_bytes() == expected.encode("utf-8")
-    restore(originals)
+    restore(originals, tmp_path)
     assert client.read_bytes() == original.encode("utf-8")
 
 
